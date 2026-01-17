@@ -116,3 +116,25 @@ Follow each step in order.
 
 ## 11) WebSocket alerts
 1. Connect to `ws://localhost:8000/api/ws/alerts` for alert notifications.
+
+## 12) MongoDB quick check (optional)
+1. Open a Mongo shell (Docker container):
+   ```powershell
+   docker exec -it cs-mongo mongosh
+   ```
+2. Basic commands:
+   ```javascript
+   show dbs // List all databases to verify Mongo is reachable.
+   use cybersentinel // Switch to the app database.
+   show collections // Show tables/collections in this database.
+   db.users.find().pretty() // Inspect all users (admin registration check).
+   db.alerts.find().pretty() // Inspect alert records.
+   db.logs.find().pretty() // Inspect ingested log records.
+   db.users.findOne() // Quick sanity check for a single user doc.
+   db.alerts.countDocuments() // Count alerts to confirm inserts.
+   db.logs.countDocuments() // Count logs to confirm ingestion.
+   db.logs.find({ "metadata.ip": "10.0.0.1" }).pretty() // Filter by a field.
+   db.logs.createIndex({ timestamp: -1 }) // Add index to speed recent-log queries.
+   db.logs.deleteMany({ source: "test" }) // Clean up test data.
+   db.stats() // Database size and storage stats.
+   ```
