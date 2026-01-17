@@ -21,6 +21,15 @@ def configure_logging(settings: Settings) -> None:
         "%(funcName)s:%(lineno)d %(message)s"
     )
     format_basic = "%(asctime)s %(levelname)s %(app_env)s %(name)s %(message)s"
+    record_factory = logging.getLogRecordFactory()
+
+    def add_app_env(*args, **kwargs) -> logging.LogRecord:
+        record = record_factory(*args, **kwargs)
+        if not hasattr(record, "app_env"):
+            record.app_env = settings.app_env
+        return record
+
+    logging.setLogRecordFactory(add_app_env)
     logging.basicConfig(level=level, format=format_detail if level == logging.DEBUG else format_basic)
     root_logger = logging.getLogger()
     root_logger.addFilter(ContextFilter(settings.app_env))
