@@ -13,6 +13,13 @@ Follow each step in order.
    - `CyberSentinel-Backend`
    - `CyberSentinel-Agentic-AI`
 
+## 2.1) Environment file
+1. Copy the sample env:
+   - `copy .env.sample .env` (Windows)
+2. Update at least:
+   - `JWT_SECRET` (use a long random string)
+   - `MONGO_URI` (see local vs Docker steps below)
+
 ## 3) Start infrastructure with Docker
 1. From the backend repo root, run:
    - `docker compose up --build`
@@ -91,17 +98,21 @@ Follow each step in order.
    .\.venv\Scripts\activate
    pip install -r requirements.txt
    ```
-2. Set environment variables (PowerShell example):
+2. Start MongoDB (if you don't have it installed locally):
    ```powershell
-   $env:MONGO_URI='mongodb://localhost:27017'
-   $env:MONGO_DB='cybersentinel'
-   $env:JWT_SECRET='change_me'
-   $env:KAFKA_ENABLED='false'
+   docker run --name cs-mongo -p 27017:27017 -d mongo:6
    ```
-3. Start the API:
+3. Use `.env` instead of setting env vars inline:
+   - `MONGO_URI=mongodb://localhost:27017`
+   - `MONGO_DB=cybersentinel`
+   - `JWT_SECRET=<your_secret>`
+   - `KAFKA_ENABLED=false`
+4. Start the API:
    ```bash
    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
+5. First run note:
+   - You will see "Model registry not initialized" until you call the retrain endpoint in step 6.
 
 ## 11) WebSocket alerts
 1. Connect to `ws://localhost:8000/api/ws/alerts` for alert notifications.
