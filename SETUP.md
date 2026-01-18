@@ -5,7 +5,7 @@ Follow each step in order.
 ## 1) Prerequisites
 1. Install Docker Desktop.
 2. Install Git.
-3. Install Python 3.9+ if you want to run locally without Docker.
+3. Install Python 3.11 if you want to run locally without Docker. If you have multiple Python versions, use the Python Launcher (`py`) to target 3.11 in the steps below.
 
 ## 2) Clone the repositories
 1. Clone this repo.
@@ -94,7 +94,7 @@ Follow each step in order.
 ## 10) Run locally without Docker (optional)
 1. Create a virtual environment and install deps:
    ```bash
-   python -m venv .venv
+   py -3.11 -m venv .venv (or `python -m venv .venv`)
    .\.venv\Scripts\activate
    pip install -r requirements.txt
    ```
