@@ -114,6 +114,20 @@ Follow each step in order.
 5. First run note:
    - You will see "Model registry not initialized" until you call the retrain endpoint in step 6.
 
+## 10.1) Seed dev admin + alerts (optional)
+1. Ensure `.env` is set for local DB:
+   - `MONGO_URI=mongodb://localhost:27017`
+   - `MONGO_DB=cybersentinel`
+   - `JWT_SECRET=<your_secret>`
+2. With your virtual environment active, run:
+   ```bash
+   python scripts/dev_seed.py --email admin@example.com --password ChangeMe123! --alerts 12 --token-days 60
+   ```
+3. The script will:
+   - Create or reuse the admin user by email.
+   - Append sample alerts into the `alerts` collection.
+   - Print a 60-day access token you can use for frontend requests.
+
 ## 11) WebSocket alerts
 1. Connect to `ws://localhost:8000/api/ws/alerts` for alert notifications.
 
