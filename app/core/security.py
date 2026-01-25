@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pyotp
 from jose import JWTError, jwt
@@ -18,9 +18,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def create_access_token(data: Dict[str, Any], settings: Settings) -> str:
+def create_access_token(data: Dict[str, Any], settings: Settings, exp_minutes: Optional[int] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_exp_minutes)
+    expire = datetime.utcnow() + timedelta(minutes=exp_minutes or settings.jwt_exp_minutes)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
