@@ -1,5 +1,7 @@
 from typing import Optional
 
+from pymongo import ASCENDING, DESCENDING
+
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.core.config import Settings
@@ -24,3 +26,15 @@ def get_db() -> AsyncIOMotorDatabase:
     if _db is None:
         raise RuntimeError("MongoDB not initialized")
     return _db
+
+
+async def ensure_indexes() -> None:
+    db = get_db()
+    await db.get_collection("users").create_index("email", unique=True)
+    await db.get_collection("logs").create_index([("timestamp", DESCENDING)])
+    await db.get_collection("logs").create_index("source")
+    await db.get_collection("logs").create_index("severity")
+    await db.get_collection("alerts").create_index([("created_at", DESCENDING)])
+    await db.get_collection("alerts").create_index("severity")
+    await db.get_collection("alerts").create_index("alert_type")
+    await db.get_collection("alerts").create_index("log_id")

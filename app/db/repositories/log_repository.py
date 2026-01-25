@@ -17,5 +17,9 @@ class LogRepository:
         cursor = self._collection.find().sort("timestamp", 1).limit(limit)
         return await cursor.to_list(length=limit)
 
+    async def list_logs(self, limit: int) -> List[Dict[str, Any]]:
+        cursor = self._collection.find().sort("timestamp", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+
     async def get_by_id(self, log_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(log_id)})
