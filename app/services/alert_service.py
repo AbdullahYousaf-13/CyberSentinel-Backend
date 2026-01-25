@@ -34,8 +34,13 @@ class AlertService:
         await manager.broadcast({"event": "alert_created", "alert_id": alert_id, "severity": severity})
         return alert_id
 
-    async def list_alerts(self, limit: int = 50) -> list:
-        return await self._alerts.list_alerts(limit)
+    async def list_alerts(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> list:
+        return await self._alerts.list_alerts(limit=limit, offset=offset, filters=filters)
 
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
         return await self._alerts.get_alert(alert_id)

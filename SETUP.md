@@ -152,3 +152,9 @@ Follow each step in order.
    db.logs.deleteMany({ source: "test" }) // Clean up test data.
    db.stats() // Database size and storage stats.
    ```
+
+
+   py -3.11 -m venv .venv
+   .\.venv\Scripts\activate
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 

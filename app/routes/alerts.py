@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.agent import InvestigationPlanResponse
 from app.schemas.alert import AlertResponse
@@ -13,9 +16,26 @@ router = APIRouter()
 @router.get("/", response_model=list[AlertResponse])
 async def list_alerts(
     current_user: dict = Depends(get_current_user),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    severity: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    start_ts: Optional[datetime] = None,
+    end_ts: Optional[datetime] = None,
 ) -> list[AlertResponse]:
     service = AlertService()
-    alerts = await service.list_alerts()
+    filters = {}
+    if severity:
+        filters["severity"] = severity
+    if alert_type:
+        filters["alert_type"] = alert_type
+    if start_ts or end_ts:
+        filters["created_at"] = {}
+        if start_ts:
+            filters["created_at"]["$gte"] = start_ts
+        if end_ts:
+            filters["created_at"]["$lte"] = end_ts
+    alerts = await service.list_alerts(limit=limit, offset=offset, filters=filters)
     response = []
     for alert in alerts:
         response.append(

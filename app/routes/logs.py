@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.log import LogCreate, LogResponse
 from app.services.auth_service import get_current_user
@@ -11,10 +14,26 @@ router = APIRouter()
 @router.get("/", response_model=list[LogResponse])
 async def list_logs(
     current_user: dict = Depends(get_current_user),
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    source: Optional[str] = None,
+    severity: Optional[str] = None,
+    start_ts: Optional[datetime] = None,
+    end_ts: Optional[datetime] = None,
 ) -> list[LogResponse]:
     repo = LogRepository()
-    logs = await repo.list_logs(limit=limit)
+    filters = {}
+    if source:
+        filters["source"] = source
+    if severity:
+        filters["severity"] = severity
+    if start_ts or end_ts:
+        filters["timestamp"] = {}
+        if start_ts:
+            filters["timestamp"]["$gte"] = start_ts
+        if end_ts:
+            filters["timestamp"]["$lte"] = end_ts
+    logs = await repo.list_logs(limit=limit, offset=offset, filters=filters)
     response = []
     for log in logs:
         response.append(

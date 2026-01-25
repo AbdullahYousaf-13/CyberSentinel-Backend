@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     agent_service_url: Optional[str] = Field(None, env="AGENT_SERVICE_URL")
     agent_timeout_seconds: int = Field(10, env="AGENT_TIMEOUT_SECONDS")
 
+    cors_allow_origins: str = Field(
+        "http://localhost:3000,http://127.0.0.1:3000", env="CORS_ALLOW_ORIGINS"
+    )
+
     class Config:
         env_file = ".env"
         case_sensitive = False

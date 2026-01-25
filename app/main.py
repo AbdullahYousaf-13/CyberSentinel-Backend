@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -14,6 +15,18 @@ def create_app() -> FastAPI:
     configure_logging(settings)
 
     app = FastAPI(title="CyberSentinel Backend", version="1.0.0")
+    cors_origins = [
+        origin.strip()
+        for origin in settings.cors_allow_origins.split(",")
+        if origin.strip()
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     app.include_router(health.router, prefix="/api/health", tags=["health"])
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
