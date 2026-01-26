@@ -15,8 +15,20 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_admin(payload: RegisterRequest, auth_service: AuthService = Depends(get_auth_service)) -> UserResponse:
-    user = await auth_service.register_admin(payload.email, payload.password)
-    return UserResponse(id=user["id"], email=user["email"], is_2fa_enabled=False, created_at=user.get("created_at"))
+    user = await auth_service.register_admin(
+        payload.email,
+        payload.password,
+        payload.first_name,
+        payload.last_name,
+    )
+    return UserResponse(
+        id=user["id"],
+        email=user["email"],
+        is_2fa_enabled=False,
+        created_at=user.get("created_at"),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+    )
 
 
 @router.post("/login", response_model=TokenResponse)

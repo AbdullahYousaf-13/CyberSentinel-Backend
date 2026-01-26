@@ -24,7 +24,13 @@ class AuthService:
         self._settings = settings
         self._users = UserRepository()
 
-    async def register_admin(self, email: str, password: str) -> Dict[str, str]:
+    async def register_admin(
+        self,
+        email: str,
+        password: str,
+        first_name: str,
+        last_name: str,
+    ) -> Dict[str, str]:
         if await self._users.count_users() > 0:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Admin already exists")
         user_payload = {
@@ -32,10 +38,18 @@ class AuthService:
             "password_hash": hash_password(password),
             "totp_secret": None,
             "is_2fa_enabled": False,
+            "first_name": first_name,
+            "last_name": last_name,
             "created_at": datetime.utcnow(),
         }
         user_id = await self._users.create_user(user_payload)
-        return {"id": user_id, "email": email, "created_at": user_payload["created_at"]}
+        return {
+            "id": user_id,
+            "email": email,
+            "created_at": user_payload["created_at"],
+            "first_name": first_name,
+            "last_name": last_name,
+        }
 
     async def authenticate(self, email: str, password: str, totp_code: Optional[str]) -> str:
         user = await self._users.get_by_email(email)
@@ -83,6 +97,8 @@ class AuthService:
             "email": user["email"],
             "is_2fa_enabled": user["is_2fa_enabled"],
             "created_at": user["created_at"],
+            "first_name": user.get("first_name"),
+            "last_name": user.get("last_name"),
         }
 
 

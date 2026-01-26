@@ -7,6 +7,8 @@ from pydantic import BaseModel, EmailStr
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
+    first_name: str
+    last_name: str
 
 
 class LoginRequest(BaseModel):
@@ -34,3 +36,5 @@ class UserResponse(BaseModel):
     email: EmailStr
     is_2fa_enabled: bool
     created_at: datetime
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
