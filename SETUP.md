@@ -166,6 +166,9 @@ Follow each step in order.
    db.logs.deleteMany({ source: "test" }) // Clean up test data.
    db.stats() // Database size and storage stats.
   ```
+---
+
+db.users.deleteMany({})
 
 .venv\Scripts\activate  
 pip install -r requirements.txt  
@@ -174,3 +177,5 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 Creds:
 Email:abdullahyousaf132@gmail.com
 Password:abd@1234
+
+---

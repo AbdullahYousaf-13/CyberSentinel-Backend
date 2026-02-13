@@ -31,6 +31,8 @@ def get_db() -> AsyncIOMotorDatabase:
 async def ensure_indexes() -> None:
     db = get_db()
     await db.get_collection("users").create_index("email", unique=True)
+    await db.get_collection("users").create_index("email_verification_token_hash")
+    await db.get_collection("users").create_index("password_reset_code_hash")
     await db.get_collection("logs").create_index([("timestamp", DESCENDING)])
     await db.get_collection("logs").create_index("source")
     await db.get_collection("logs").create_index("severity")

@@ -32,6 +32,19 @@ class Settings(BaseSettings):
         "http://localhost:3000,http://127.0.0.1:3000", env="CORS_ALLOW_ORIGINS"
     )
 
+    frontend_base_url: str = Field("http://localhost:3000", env="FRONTEND_BASE_URL")
+
+    smtp_host: Optional[str] = Field(None, env="SMTP_HOST")
+    smtp_port: int = Field(587, env="SMTP_PORT")
+    smtp_user: Optional[str] = Field(None, env="SMTP_USER")
+    smtp_password: Optional[str] = Field(None, env="SMTP_PASSWORD")
+    smtp_use_tls: bool = Field(True, env="SMTP_USE_TLS")
+    smtp_use_ssl: bool = Field(False, env="SMTP_USE_SSL")
+    email_from: str = Field("no-reply@cybersentinel.local", env="EMAIL_FROM")
+
+    email_verify_ttl_minutes: int = Field(60 * 24, env="EMAIL_VERIFY_TTL_MINUTES")
+    password_reset_ttl_minutes: int = Field(15, env="PASSWORD_RESET_TTL_MINUTES")
+
     class Config:
         env_file = ".env"
         case_sensitive = False

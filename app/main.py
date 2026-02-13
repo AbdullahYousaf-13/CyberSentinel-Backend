@@ -15,15 +15,21 @@ def create_app() -> FastAPI:
     configure_logging(settings)
 
     app = FastAPI(title="CyberSentinel Backend", version="1.0.0")
-    cors_origins = [
-        origin.strip()
-        for origin in settings.cors_allow_origins.split(",")
-        if origin.strip()
-    ]
+    cors_setting = settings.cors_allow_origins.strip()
+    if cors_setting == "*":
+        cors_origins = ["*"]
+        allow_credentials = False
+    else:
+        cors_origins = [
+            origin.strip()
+            for origin in settings.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
+        allow_credentials = True
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

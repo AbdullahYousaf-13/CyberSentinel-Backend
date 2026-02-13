@@ -21,6 +21,7 @@ async def list_users(
                 id=str(user["_id"]),
                 email=user["email"],
                 is_2fa_enabled=user.get("is_2fa_enabled", False),
+                email_verified=user.get("email_verified", False),
                 created_at=user["created_at"],
             )
         )
@@ -40,5 +41,6 @@ async def get_user(
         id=str(user["_id"]),
         email=user["email"],
         is_2fa_enabled=user.get("is_2fa_enabled", False),
+        email_verified=user.get("email_verified", False),
         created_at=user["created_at"],
     )

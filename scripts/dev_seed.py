@@ -26,6 +26,7 @@ def ensure_admin_user(db, email: str, password: str) -> Dict[str, Any]:
         "password_hash": hash_password(password),
         "totp_secret": None,
         "is_2fa_enabled": False,
+        "email_verified": True,
         "created_at": datetime.utcnow(),
     }
     result = users.insert_one(payload)
