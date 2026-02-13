@@ -155,10 +155,10 @@ Follow each step in order.
    show dbs // List all databases to verify Mongo is reachable.
    use cybersentinel // Switch to the app database.
    show collections // Show tables/collections in this database.
-   db.users.find().pretty() // Inspect all users (admin registration check).
+   db.user.find().pretty() // Inspect all users (admin registration check).
    db.alerts.find().pretty() // Inspect alert records.
    db.logs.find().pretty() // Inspect ingested log records.
-   db.users.findOne() // Quick sanity check for a single user doc.
+   db.user.findOne() // Quick sanity check for a single user doc.
    db.alerts.countDocuments() // Count alerts to confirm inserts.
    db.logs.countDocuments() // Count logs to confirm ingestion.
    db.logs.find({ "metadata.ip": "10.0.0.1" }).pretty() // Filter by a field.
@@ -169,6 +169,7 @@ Follow each step in order.
 ---
 
 db.users.deleteMany({})
+db.users.find({}, { email: 1, is_2fa_enabled: 1, email_verified: 1 }).pretty()
 
 .venv\Scripts\activate  
 pip install -r requirements.txt  

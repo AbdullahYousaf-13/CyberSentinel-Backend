@@ -17,7 +17,7 @@ from app.core.security import create_access_token, hash_password
 
 
 def ensure_admin_user(db, email: str, password: str) -> Dict[str, Any]:
-    users = db.get_collection("users")
+    users = db.get_collection("user")
     existing = users.find_one({"email": email})
     if existing:
         return existing

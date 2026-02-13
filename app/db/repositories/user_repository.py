@@ -7,7 +7,7 @@ from app.db.mongo import get_db
 
 class UserRepository:
     def __init__(self) -> None:
-        self._collection = get_db().get_collection("users")
+        self._collection = get_db().get_collection("user")
 
     async def create_user(self, payload: Dict[str, Any]) -> str:
         result = await self._collection.insert_one(payload)
