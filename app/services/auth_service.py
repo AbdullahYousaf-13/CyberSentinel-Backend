@@ -196,7 +196,10 @@ class AuthService:
         )
 
     async def get_current_user(self, token: str) -> Dict[str, str]:
-        payload = validate_jwt(token, self._settings)
+        try:
+            payload = validate_jwt(token, self._settings)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
         email = payload.get("email")
         if not email:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
