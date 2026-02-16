@@ -168,12 +168,16 @@ Follow each step in order.
   ```
 ---
 
+docker exec -it cs-mongo mongosh
+
 db.users.deleteMany({})
 db.users.find({}, { email: 1, is_2fa_enabled: 1, email_verified: 1 }).pretty()
 
+
 .venv\Scripts\activate  
-pip install -r requirements.txt  
+pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 
+
 
 Creds:
 Email:abdullahyousaf132@gmail.com
