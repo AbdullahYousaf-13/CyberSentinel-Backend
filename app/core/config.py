@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     debug_mode: bool = Field(False, env="DEBUG_MODE")
     detailed_logging: bool = Field(False, env="DETAILED_LOGGING")
 
-    mongo_uri: str = Field("mongodb://mongodb:27017", env="MONGO_URI")
+    mongo_uri: str = Field("", env="MONGO_URI")
     mongo_db: str = Field("cybersentinel", env="MONGO_DB")
 
     jwt_secret: str = Field("change_me", env="JWT_SECRET")
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     jwt_exp_minutes: int = Field(60, env="JWT_EXP_MINUTES")
 
     kafka_enabled: bool = Field(False, env="KAFKA_ENABLED")
-    kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
+    kafka_bootstrap_servers: str = Field("", env="KAFKA_BOOTSTRAP_SERVERS")
     kafka_topic: str = Field("cybersentinel-logs", env="KAFKA_TOPIC")
     kafka_group_id: str = Field("cybersentinel-backend", env="KAFKA_GROUP_ID")
 

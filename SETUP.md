@@ -1,186 +1,83 @@
-# Setup Guide
+# Setup Guide (Atlas-First)
 
-Follow each step in order.
+Follow these steps to run CyberSentinel with a shared MongoDB Atlas database.
 
 ## 1) Prerequisites
 
-1. Install Docker Desktop.
-2. Install Git.
-3. Install Python 3.11 if you want to run locally without Docker. If you have multiple Python versions, use the Python Launcher (`py`) to target 3.11 in the steps below.
+1. Python 3.11
+2. Node.js + npm
+3. MongoDB Atlas cluster + DB user + IP allowlist configured
 
-## 2) Clone the repositories
+## 2) Backend environment
 
-1. Clone this repo.
-2. Clone the sibling agent repo into the same parent folder as this repo:
-  - `CyberSentinel-Backend`
-  - `CyberSentinel-Agentic-AI`
+From backend root:
 
-## 2.1) Environment file
+```powershell
+copy .env.sample .env
+```
 
-1. Copy the sample env:
-  - `copy .env.sample .env` (Windows)
-2. Update at least:
-  - `JWT_SECRET` (use a long random string)
-  - `MONGO_URI` (see local vs Docker steps below)
+Set these in `.env`:
 
-## 3) Start infrastructure with Docker
+```env
+MONGO_URI=mongodb+srv://<DB_USER>:<URL_ENCODED_PASSWORD>@<ATLAS_HOST>/?retryWrites=true&w=majority&appName=cybersentinel-dev
+MONGO_DB=cybersentinel
+JWT_SECRET=<LONG_RANDOM_SECRET>
+KAFKA_ENABLED=false
+```
 
-1. From the backend repo root, run:
-  - `docker compose up --build`
-2. Wait until MongoDB and Kafka show healthy logs.
+## 3) Run backend locally
 
-## 4) Initialize the first admin user
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-1. Open a new terminal.
-2. Register the first admin:
-  ```bash
-   curl -X POST http://localhost:8000/api/auth/register \
-     -H "Content-Type: application/json" \
-     -d '{"email":"admin@example.com","password":"ChangeMe123!"}'
-  ```
-3. Log in:
-  ```bash
-   curl -X POST http://localhost:8000/api/auth/login \
-     -H "Content-Type: application/json" \
-     -d '{"email":"admin@example.com","password":"ChangeMe123!"}'
-  ```
-4. Store the `access_token` from the response for later calls.
+Backend URL: `http://localhost:8000`
 
-## 5) (Optional) Enable TOTP 2FA
+## 4) Run frontend locally
 
-1. Call setup:
-  ```bash
-   curl -X POST http://localhost:8000/api/auth/2fa/setup \
-     -H "Authorization: Bearer <TOKEN>"
-  ```
-2. Scan the provisioning URI in your authenticator app.
-3. Verify:
-  ```bash
-   curl -X POST http://localhost:8000/api/auth/2fa/verify \
-     -H "Authorization: Bearer <TOKEN>" \
-     -H "Content-Type: application/json" \
-     -d '{"totp_code":"123456"}'
-  ```
+In `CyberSentinel-Frontend/.env`:
 
-## 6) Create an initial model version
+```env
+REACT_APP_API_BASE_URL=http://localhost:8000
+```
 
-1. Use the retrain endpoint with sample data:
-  ```bash
-   curl -X POST http://localhost:8000/api/ml/retrain \
-     -H "Authorization: Bearer <TOKEN>" \
-     -H "Content-Type: application/json" \
-     -d '{"reason":"initial bootstrap","features":[[0.1,1,0.5,0.2,0.1],[0.9,2,0.8,0.7,0.3]],"labels":[0,1]}'
-  ```
-2. Confirm the response includes a version.
+Start frontend:
 
-## 7) Ingest logs
+```powershell
+cd ..\CyberSentinel-Frontend
+npm install
+npm start
+```
 
-1. Ingest a log via REST:
-  ```bash
-   curl -X POST http://localhost:8000/api/logs/ \
-     -H "Authorization: Bearer <TOKEN>" \
-     -H "Content-Type: application/json" \
-     -d '{"timestamp":"2025-01-17T12:00:00Z","source":"endpoint","message":"failed login","metadata":{"ip":"10.0.0.1"},"severity":"medium"}'
-  ```
+Frontend URL: `http://localhost:3000`
 
-## 8) Run batch inference
+## 5) Verify shared database (both devices)
 
-1. Trigger batch inference:
-  ```bash
-   curl -X POST http://localhost:8000/api/ml/batch-infer \
-     -H "Authorization: Bearer <TOKEN>" \
-     -H "Content-Type: application/json" \
-     -d '{"batch_size":100}'
-  ```
+Run on each device:
 
-## 9) View alerts
+```powershell
+.\.venv\Scripts\python -c "from pymongo import MongoClient; from app.core.config import get_settings; s=get_settings(); db=MongoClient(s.mongo_uri)[s.mongo_db]; print('logs=',db.logs.count_documents({})); print('alerts=',db.alerts.count_documents({}))"
+```
 
-1. List alerts:
-  ```bash
-   curl -X GET http://localhost:8000/api/alerts/ \
-     -H "Authorization: Bearer <TOKEN>"
-  ```
+If both outputs match, both devices are connected to the same Atlas database.
 
-## 10) Run locally without Docker (optional)
+## 6) Optional: seed development data
 
-1. Create a virtual environment and install deps:
-  ```bash
-   py -3.11 -m venv .venv (or `python -m venv .venv`)
-   .\.venv\Scripts\activate
-   pip install -r requirements.txt
-  ```
-2. Start MongoDB (if you don't have it installed locally):
-  ```powershell
-   docker run --name cs-mongo -p 27017:27017 -d mongo:6
-  ```
-3. Use `.env` instead of setting env vars inline:
-  - `MONGO_URI=mongodb://localhost:27017`
-  - `MONGO_DB=cybersentinel`
-  - `JWT_SECRET=<your_secret>`
-  - `KAFKA_ENABLED=false`
-4. Start the API:
-  ```bash
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-  ```
-5. First run note:
-  - You will see "Model registry not initialized" until you call the retrain endpoint in step 6.
+```powershell
+python scripts/dev_seed.py --email admin@example.com --password ChangeMe123! --alerts 12 --token-days 60
+```
 
-## 10.1) Seed dev admin + alerts (optional)
-
-1. Ensure `.env` is set for local DB:
-  - `MONGO_URI=mongodb://localhost:27017`
-  - `MONGO_DB=cybersentinel`
-  - `JWT_SECRET=<your_secret>`
-2. With your virtual environment active, run:
-  ```bash
-   python scripts/dev_seed.py --email admin@example.com --password ChangeMe123! --alerts 12 --token-days 60
-  ```
-3. The script will:
-  - Create or reuse the admin user by email.
-  - Append sample alerts into the `alerts` collection.
-  - Print a 60-day access token you can use for frontend requests.
-
-## 11) WebSocket alerts
-
-1. Connect to `ws://localhost:8000/api/ws/alerts` for alert notifications.
-
-## 12) MongoDB quick check (optional)
-
-1. Open a Mongo shell (Docker container):
-  ```powershell
-   docker exec -it cs-mongo mongosh
-  ```
-2. Basic commands:
-  ```javascript
-   show dbs // List all databases to verify Mongo is reachable.
-   use cybersentinel // Switch to the app database.
-   show collections // Show tables/collections in this database.
-   db.user.find().pretty() // Inspect all users (admin registration check).
-   db.alerts.find().pretty() // Inspect alert records.
-   db.logs.find().pretty() // Inspect ingested log records.
-   db.user.findOne() // Quick sanity check for a single user doc.
-   db.alerts.countDocuments() // Count alerts to confirm inserts.
-   db.logs.countDocuments() // Count logs to confirm ingestion.
-   db.logs.find({ "metadata.ip": "10.0.0.1" }).pretty() // Filter by a field.
-   db.logs.createIndex({ timestamp: -1 }) // Add index to speed recent-log queries.
-   db.logs.deleteMany({ source: "test" }) // Clean up test data.
-   db.stats() // Database size and storage stats.
-  ```
 ---
 
-docker exec -it cs-mongo mongosh
+CS Creds:
+Email: abdullahyousaf132@gmail.com
+Password: abd@1234
 
-db.users.deleteMany({})
-db.users.find({}, { email: 1, is_2fa_enabled: 1, email_verified: 1 }).pretty()
-
-
-.venv\Scripts\activate  
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 
-
-
-Creds:
-Email:abdullahyousaf132@gmail.com
-Password:abd@1234
+Atlas:
+Usar Name: abdullahyousaf132
+Password: abd@1234
 
 ---
