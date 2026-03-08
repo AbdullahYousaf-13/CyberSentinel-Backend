@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = Field("", env="KAFKA_BOOTSTRAP_SERVERS")
     kafka_topic: str = Field("cybersentinel-logs", env="KAFKA_TOPIC")
     kafka_group_id: str = Field("cybersentinel-backend", env="KAFKA_GROUP_ID")
+    wazuh_ingest_key: Optional[str] = Field(None, env="WAZUH_INGEST_KEY")
 
     model_dir: str = Field("app/ml/models", env="MODEL_DIR")
     model_integrity_required: bool = Field(True, env="MODEL_INTEGRITY_REQUIRED")

@@ -16,6 +16,7 @@ class InferenceEngine:
         self._integrity_required = integrity_required
         self._iforest = None
         self._rf = None
+        self._expected_feature_count = None
         self._metadata: Dict[str, Any] = {}
 
     def load_version(self, version: str) -> None:
@@ -34,11 +35,13 @@ class InferenceEngine:
 
         self._iforest = joblib.load(iforest_path)
         self._rf = joblib.load(rf_path)
+        self._validate_model_feature_compatibility()
         logger.info("Loaded ML models for version %s", version)
 
     def predict(self, features: np.ndarray, threshold: float) -> Dict[str, Any]:
         if self._iforest is None or self._rf is None:
             raise RuntimeError("Models not loaded")
+        self._validate_input_shape(features)
 
         anomaly_scores = -self._iforest.score_samples(features)
         rf_probs = self._rf.predict_proba(features)
@@ -56,6 +59,30 @@ class InferenceEngine:
             else:
                 results.append({"alert_type": "benign", "classification": None, "score": score})
         return {"results": results}
+
+    def _validate_model_feature_compatibility(self) -> None:
+        if not hasattr(self._iforest, "n_features_in_") or not hasattr(self._rf, "n_features_in_"):
+            raise ValueError("Loaded models are missing n_features_in_ and cannot be validated")
+
+        iforest_features = int(self._iforest.n_features_in_)
+        rf_features = int(self._rf.n_features_in_)
+        if iforest_features != rf_features:
+            raise ValueError(
+                "Model feature mismatch: isolation_forest expects "
+                f"{iforest_features}, random_forest expects {rf_features}"
+            )
+        self._expected_feature_count = iforest_features
+
+    def _validate_input_shape(self, features: np.ndarray) -> None:
+        if features.ndim != 2:
+            raise ValueError("Features must be a 2D numpy array")
+        if self._expected_feature_count is None:
+            raise RuntimeError("Model feature validation is incomplete")
+        if features.shape[1] != self._expected_feature_count:
+            raise ValueError(
+                "Input feature mismatch: model expects "
+                f"{self._expected_feature_count} features, received {features.shape[1]}"
+            )
 
     @staticmethod
     def _verify_hash(path: Path, expected_hash: str) -> None:
