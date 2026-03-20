@@ -6,7 +6,6 @@ from app.core.logging import configure_logging
 from app.core.websocket import websocket_router
 from app.db.mongo import connect_to_mongo, close_mongo_connection, ensure_indexes
 from app.routes import alerts, auth, health, logs, ml, users
-from app.services.ingestion_service import start_kafka_consumer, stop_kafka_consumer
 from app.services.ml_service import MLService
 
 
@@ -47,13 +46,9 @@ def create_app() -> FastAPI:
         await connect_to_mongo(settings)
         await ensure_indexes()
         await MLService.initialize(settings)
-        if settings.kafka_enabled:
-            await start_kafka_consumer(settings)
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
-        if settings.kafka_enabled:
-            await stop_kafka_consumer()
         await close_mongo_connection()
 
     return app

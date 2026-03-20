@@ -16,7 +16,6 @@ Edit `CyberSentinel-Backend/.env` on both machines:
 ```env
 MONGO_URI=mongodb+srv://<DB_USER>:<DB_PASS>@<CLUSTER_URL>/?retryWrites=true&w=majority
 MONGO_DB=cybersentinel
-KAFKA_ENABLED=false
 ```
 
 Keep other values per developer (JWT secret, SMTP, etc.) as needed.

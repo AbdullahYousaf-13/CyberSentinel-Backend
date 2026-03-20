@@ -16,10 +16,6 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field("HS256", env="JWT_ALGORITHM")
     jwt_exp_minutes: int = Field(60, env="JWT_EXP_MINUTES")
 
-    kafka_enabled: bool = Field(False, env="KAFKA_ENABLED")
-    kafka_bootstrap_servers: str = Field("", env="KAFKA_BOOTSTRAP_SERVERS")
-    kafka_topic: str = Field("cybersentinel-logs", env="KAFKA_TOPIC")
-    kafka_group_id: str = Field("cybersentinel-backend", env="KAFKA_GROUP_ID")
     wazuh_ingest_key: Optional[str] = Field(None, env="WAZUH_INGEST_KEY")
 
     model_dir: str = Field("app/ml/models", env="MODEL_DIR")

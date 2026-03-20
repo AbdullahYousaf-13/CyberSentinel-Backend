@@ -4,7 +4,6 @@
   - `MONGO_URI=mongodb+srv://<user>:<url_encoded_password>@<atlas-host>/?retryWrites=true&w=majority&appName=cybersentinel-dev`
   - `MONGO_DB=cybersentinel`
   - `JWT_SECRET=your_long_random_secret`
-  - `KAFKA_ENABLED=false`
 
 - Start backend:
 ```powershell

@@ -17,7 +17,7 @@ SYSTEM OVERVIEW
 CyberSentinel detects security anomalies from logs using classical ML and assists analysts using a sandboxed agentic AI (sitting in a seperate repo).
 
 The system:
-- Ingests logs via REST API and Kafka
+- Ingests logs via REST API
 - Stores logs and alerts separately
 - Performs batch-based ML inference
 - Generates immutable alerts
@@ -41,7 +41,6 @@ TECH STACK (LOCKED)
 Backend: Python 3.9+
 Framework: FastAPI
 Database: MongoDB
-Messaging: Apache Kafka
 ML: scikit-learn (Isolation Forest, Random Forest)
 Realtime: WebSockets
 Auth: JWT + Email/Password + TOTP
@@ -73,7 +72,6 @@ INGESTION REQUIREMENTS
 --------------------------------------------------
 
 - Support REST-based JSON log ingestion
-- Support Kafka-based ingestion
 - Both ingestion paths must feed the SAME ingestion service
 - ML logic must not depend on ingestion source
 

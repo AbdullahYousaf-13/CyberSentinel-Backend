@@ -23,7 +23,7 @@ CyberSentinel prioritizes **explainability, safety, and architectural clarity** 
 ## 2. System Boundaries & Non-Goals
 
 ### In Scope
-- Log ingestion via REST API and Kafka
+- Log ingestion via REST API
 - Batch-based ML inference
 - Anomaly and attack detection using classical ML
 - Immutable alert generation
@@ -50,7 +50,7 @@ These boundaries are intentional to ensure **safety, clarity, and implementabili
 Log Sources
  (Apps / Systems)
       |
-      | REST API / Kafka
+      | REST API
       v
 +---------------------+
 | Log Ingestion Layer |

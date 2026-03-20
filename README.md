@@ -5,14 +5,13 @@ CyberSentinel is a classical ML based security monitoring backend with a sandbox
 ## Architecture
 - FastAPI service exposes REST APIs for ingestion, auth, alerts, and ML operations.
 - MongoDB stores logs and immutable alerts in separate collections.
-- Kafka feeds logs into the same ingestion service used by REST.
 - ML pipeline runs batch inference using Isolation Forest and Random Forest.
 - WebSockets broadcast new alerts to subscribed clients.
 - Agent integration is a read-only HTTP client to a separate repo/service.
 - Agent audit logs are stored in MongoDB to track requests and responses.
 
 ## ML Pipeline
-1. Logs are ingested via REST or Kafka into the logs collection.
+1. Logs are ingested via REST into the logs collection.
 2. Feature extraction converts logs into a numeric feature matrix.
 3. Batch inference runs Isolation Forest for anomalies and Random Forest for known attacks.
 4. Hybrid decision logic:

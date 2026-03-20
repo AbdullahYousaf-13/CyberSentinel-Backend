@@ -36,5 +36,5 @@ def configure_logging(settings: Settings) -> None:
 
     # Reduce noisy third-party logs in normal mode.
     if level != logging.DEBUG:
-        for noisy_logger in ("aiokafka", "uvicorn", "motor"):
+        for noisy_logger in ("uvicorn", "motor"):
             logging.getLogger(noisy_logger).setLevel(logging.WARNING)
