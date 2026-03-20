@@ -13,6 +13,26 @@ from app.db.repositories.log_repository import LogRepository
 router = APIRouter()
 
 
+def _build_log_filters(
+    source: Optional[str],
+    severity: Optional[str],
+    start_ts: Optional[datetime],
+    end_ts: Optional[datetime],
+) -> dict:
+    filters: dict = {}
+    if source:
+        filters["source"] = source
+    if severity:
+        filters["severity"] = severity
+    if start_ts or end_ts:
+        filters["timestamp"] = {}
+        if start_ts:
+            filters["timestamp"]["$gte"] = start_ts
+        if end_ts:
+            filters["timestamp"]["$lte"] = end_ts
+    return filters
+
+
 @router.get("/", response_model=list[LogResponse])
 async def list_logs(
     current_user: dict = Depends(get_current_user),
@@ -24,17 +44,7 @@ async def list_logs(
     end_ts: Optional[datetime] = None,
 ) -> list[LogResponse]:
     repo = LogRepository()
-    filters = {}
-    if source:
-        filters["source"] = source
-    if severity:
-        filters["severity"] = severity
-    if start_ts or end_ts:
-        filters["timestamp"] = {}
-        if start_ts:
-            filters["timestamp"]["$gte"] = start_ts
-        if end_ts:
-            filters["timestamp"]["$lte"] = end_ts
+    filters = _build_log_filters(source=source, severity=severity, start_ts=start_ts, end_ts=end_ts)
     logs = await repo.list_logs(limit=limit, offset=offset, filters=filters)
     response = []
     for log in logs:
@@ -49,6 +59,20 @@ async def list_logs(
             )
         )
     return response
+
+
+@router.get("/count")
+async def count_logs(
+    current_user: dict = Depends(get_current_user),
+    source: Optional[str] = None,
+    severity: Optional[str] = None,
+    start_ts: Optional[datetime] = None,
+    end_ts: Optional[datetime] = None,
+) -> dict[str, int]:
+    repo = LogRepository()
+    filters = _build_log_filters(source=source, severity=severity, start_ts=start_ts, end_ts=end_ts)
+    total = await repo.count_logs(filters=filters)
+    return {"total": total}
 
 
 @router.get("/{log_id}", response_model=LogResponse)

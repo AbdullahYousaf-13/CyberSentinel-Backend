@@ -32,5 +32,9 @@ class LogRepository:
         )
         return await cursor.to_list(length=limit)
 
+    async def count_logs(self, filters: Optional[Dict[str, Any]] = None) -> int:
+        query = filters or {}
+        return await self._collection.count_documents(query)
+
     async def get_by_id(self, log_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(log_id)})
