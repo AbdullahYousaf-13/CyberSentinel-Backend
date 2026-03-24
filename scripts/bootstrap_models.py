@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import joblib
+import numpy as np
+import sklearn
 
 
 def sha256(path: Path) -> str:
@@ -105,6 +107,11 @@ def main() -> None:
             "random_forest": sha256(out_rf),
         },
         "feature_count": iforest_features,
+        "library_versions": {
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
+            "numpy": np.__version__,
+        },
         "source": {
             "isolation_forest": str(iforest_path.resolve()),
             "random_forest": str(rf_path.resolve()),

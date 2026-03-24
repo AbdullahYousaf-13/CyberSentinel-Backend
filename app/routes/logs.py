@@ -1,4 +1,5 @@
 import secrets
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -20,8 +21,9 @@ def _build_log_filters(
     end_ts: Optional[datetime],
 ) -> dict:
     filters: dict = {}
-    if source:
-        filters["source"] = source
+    normalized_source = source.strip() if source else ""
+    if normalized_source:
+        filters["source"] = {"$regex": f"^{re.escape(normalized_source)}", "$options": "i"}
     if severity:
         filters["severity"] = severity
     if start_ts or end_ts:

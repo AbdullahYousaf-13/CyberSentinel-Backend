@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 import joblib
+import numpy as np
+import sklearn
 
 
 class RetrainingManager:
@@ -41,6 +43,11 @@ class RetrainingManager:
             "hashes": {
                 "isolation_forest": self._sha256(iforest_path),
                 "random_forest": self._sha256(rf_path),
+            },
+            "library_versions": {
+                "scikit_learn": sklearn.__version__,
+                "joblib": joblib.__version__,
+                "numpy": np.__version__,
             },
         }
         (version_path / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="ascii")

@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import joblib
 import numpy as np
+import sklearn
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class InferenceEngine:
             raise FileNotFoundError(f"Missing metadata for model version {version}")
 
         self._metadata = json.loads(metadata_path.read_text(encoding="ascii"))
+        self._warn_if_runtime_version_mismatch(version)
         iforest_path = version_path / "isolation_forest.joblib"
         rf_path = version_path / "random_forest.joblib"
 
@@ -37,6 +39,17 @@ class InferenceEngine:
         self._rf = joblib.load(rf_path)
         self._validate_model_feature_compatibility()
         logger.info("Loaded ML models for version %s", version)
+
+    def _warn_if_runtime_version_mismatch(self, version: str) -> None:
+        trained_versions = self._metadata.get("library_versions") or {}
+        trained_sklearn = trained_versions.get("scikit_learn")
+        if trained_sklearn and trained_sklearn != sklearn.__version__:
+            logger.warning(
+                "Model version %s was recorded with scikit-learn %s but runtime uses %s",
+                version,
+                trained_sklearn,
+                sklearn.__version__,
+            )
 
     def predict(self, features: np.ndarray, threshold: float) -> Dict[str, Any]:
         if self._iforest is None or self._rf is None:
