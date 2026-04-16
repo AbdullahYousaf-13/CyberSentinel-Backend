@@ -33,3 +33,39 @@ npm start
 cd E:\Programing\CyberSentinel\CyberSentinel-Backend
 .\.venv\Scripts\python -c "from pymongo import MongoClient; from app.core.config import get_settings; s=get_settings(); db=MongoClient(s.mongo_uri)[s.mongo_db]; print('logs=',db.logs.count_documents({})); print('alerts=',db.alerts.count_documents({}))"
 ```
+
+## Wazuh VM Status
+
+- VM name: `Wazuh-Server`
+- Ubuntu username: `dark-knight`
+- Current VM IP: `192.168.137.96`
+- Dashboard URL: `https://192.168.137.96`
+- Dashboard username: `admin`
+- Dashboard password: `Dk.13022`
+
+## Wazuh Current State
+
+- Wazuh all-in-one stack installed successfully on Ubuntu 24.04.4
+- Windows agent enrolled successfully
+- Agent name: `PC`
+- Agent status: `Active`
+- Agent OS: `Microsoft Windows 11 Pro`
+
+## Wazuh Resume Notes
+
+- SSH from Windows:
+```powershell
+ssh dark-knight@192.168.137.96
+```
+
+- If the VM IP changes after reboot, check it in the VM with:
+```bash
+hostname -I
+```
+
+- Safe shutdown:
+```bash
+sudo shutdown -h now
+```
+
+- Recommended: take a VirtualBox snapshot after major working milestones
