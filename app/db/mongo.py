@@ -1,6 +1,7 @@
 from typing import Optional
 
 from pymongo import ASCENDING, DESCENDING
+from pymongo.errors import PyMongoError
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -14,6 +15,17 @@ async def connect_to_mongo(settings: Settings) -> None:
     global _client, _db
     _client = AsyncIOMotorClient(settings.mongo_uri)
     _db = _client[settings.mongo_db]
+    try:
+        await _client.admin.command("ping")
+    except PyMongoError as exc:
+        _client.close()
+        _client = None
+        _db = None
+        raise RuntimeError(
+            "MongoDB connection failed during startup. "
+            "If you use Atlas, verify cluster status, Atlas IP Access List, "
+            "and that outbound TLS to *.mongodb.net:27017 is allowed."
+        ) from exc
 
 
 async def close_mongo_connection() -> None:

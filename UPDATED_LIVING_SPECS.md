@@ -1,128 +1,80 @@
 # CyberSentinel Updated Living Specs
+Last updated: 2026-04-10
 
-Last updated: 2026-03-08
+This document is an operational snapshot that complements the canonical spec:
+- `cybersentinel_living_spec.md` is the authoritative source of truth.
+- This file records implementation deltas and runbook notes.
 
-## 1. Objective
+## 1. Snapshot of Current Implementation
+Backend stack:
+- FastAPI + MongoDB + classical ML inference service.
+- JWT auth, email verification, optional TOTP 2FA.
+- Password reset flow with 6-digit code verification.
 
-Deploy CyberSentinel backend and hybrid ML inference in cloud, and ingest Wazuh alerts directly into backend for downstream detection and alerting.
+Detection pipeline:
+- Batch inference only (`POST /api/ml/batch-infer`).
+- Isolation Forest + Random Forest hybrid decision logic.
+- Alert generation is immutable and broadcast over WebSocket (`/api/ws/alerts`).
 
-## 2. Current Cloud State
+Ingestion:
+- Human/API ingestion path: `POST /api/logs/` (JWT).
+- Machine/Wazuh ingestion path: `POST /api/logs/wazuh` (`X-WAZUH-KEY`).
 
-### 2.1 Backend VM (Oracle Cloud)
+Agent integration:
+- Investigation planning is optional and external (`AGENT_SERVICE_URL`).
+- Backend records request/response audit events in `agent_audit` collection.
 
-- Instance name: `cybersentinel-backend`
-- Region: `India South (Hyderabad)`
-- Public IP: `129.159.230.230`
-- OS: Ubuntu 22.04
-- Runtime: Docker
+Frontend state:
+- Auth, logs, alerts, dashboard, and settings pages are wired to backend REST APIs.
+- Dashboard chart series and notification dropdown remain static mock data.
+- Frontend currently does not consume the WebSocket alert stream.
 
-### 2.2 Backend Service
-
-- Container name: `cs-backend`
-- Image: `cybersentinel-backend:prod`
-- Exposed port: `8000`
-- Health endpoint: `GET /api/health/` -> `ok`
-
-### 2.3 Model Runtime
-
-- Model directory mounted into container:
-  - host: `~/apps/CyberSentinel-Backend/app/ml/models`
-  - container: `/app/app/ml/models` (read-only)
-- Loaded model version: `20260307123306`
-- Hybrid inference engine active (Isolation Forest + Random Forest)
-
-### 2.4 Wazuh Ingestion
-
-- Endpoint: `POST /api/logs/wazuh`
-- Auth header: `X-WAZUH-KEY`
-- Verified cloud ingest success (sample inserted):
-  - id: `69ad7b4f2ea1a0197f4cacfd`
-
-## 3. Implemented Backend Changes
-
-### 3.1 New config
-
-- Added env setting:
-  - `WAZUH_INGEST_KEY`
-
-### 3.2 New route
-
-- Added machine-ingest endpoint in logs routes:
-  - `POST /api/logs/wazuh`
-- Behavior:
-  - validates `X-WAZUH-KEY`
-  - normalizes Wazuh payload
-  - maps `rule.level` to severity (`low|medium|high`)
-  - stores full payload in `metadata`
-
-### 3.3 Model safety and tooling
-
-- Added model feature-shape validation in inference engine
-- Added bootstrap script to import model artifacts into backend registry format
-- Added Wazuh sender helper script
-- Added Wazuh setup guide
-
-## 4. Data/ML Contract (Current)
-
-### 4.1 Feature extraction
-
-- Backend feature extractor emits 78 CICIDS-style features in fixed order
-
-### 4.2 Model artifacts expected
-
+## 2. Model and Artifact Contract
+Expected model registry layout:
 - `app/ml/models/registry.json`
 - `app/ml/models/versions/<version>/isolation_forest.joblib`
 - `app/ml/models/versions/<version>/random_forest.joblib`
 - `app/ml/models/versions/<version>/metadata.json`
 
-## 5. Open Issues / Risks
+Model/runtime safeguards:
+- Optional SHA-256 integrity checks at load time.
+- Feature-count compatibility checks across models and inference input.
+- scikit-learn version mismatch warning from model metadata.
 
-1. Secret exposure occurred during setup logs/chat.
-   - Must rotate:
-   - MongoDB credentials
-   - `JWT_SECRET`
-   - `WAZUH_INGEST_KEY`
-   - SMTP app password
-   - issued access tokens
-2. NSG currently may allow broad source access to port `8000`.
-   - Restrict to trusted source IPs only.
-3. scikit-learn version warning seen while loading old artifacts.
-   - Keep training/inference sklearn versions aligned.
+## 3. Key Changes Since v1.0 Spec
+- Added Wazuh machine-ingestion route with shared key validation.
+- Added email verification and password reset lifecycle.
+- Added model feature-shape validation in inference engine.
+- Added bootstrap utility for importing pretrained model artifacts.
+- Added Wazuh sender utility and setup documentation.
 
-## 6. Required Next Steps
+## 4. Operational Risks to Track
+- Rotate secrets immediately if exposed in logs or chats (`JWT_SECRET`, DB credentials, `WAZUH_INGEST_KEY`, SMTP credentials).
+- Restrict inbound network access to backend ports by trusted sources only.
+- Keep training and inference dependency versions aligned (especially scikit-learn).
+- Add TLS reverse proxy before internet exposure.
 
-1. Rotate all exposed secrets and update `.env`.
-2. Restart backend container:
-   - `docker restart cs-backend`
-3. Re-test:
-   - `GET /api/health/`
-   - `POST /api/logs/wazuh` with new key
-4. Provision separate Wazuh VM and wire forwarding to backend endpoint.
-5. Add HTTPS reverse proxy (Nginx + certbot) for backend.
-
-## 7. Quick Operations
-
-### 7.1 Check backend container
-
-```bash
-docker ps --filter name=cs-backend
-docker logs --tail 120 cs-backend
-```
-
-### 7.2 Restart backend
-
-```bash
-docker restart cs-backend
-```
-
-### 7.3 Verify health
-
+## 5. Minimal Verification Runbook
+Health check:
 ```bash
 curl http://127.0.0.1:8000/api/health/
 ```
 
-### 7.4 Verify public health
-
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://129.159.230.230:8000/api/health/"
+Batch inference smoke check (requires token):
+```bash
+curl -X POST http://127.0.0.1:8000/api/ml/batch-infer \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"batch_size":100}'
 ```
+
+Wazuh ingestion smoke check:
+```bash
+curl -X POST http://127.0.0.1:8000/api/logs/wazuh \
+  -H "X-WAZUH-KEY: <ingest-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"rule":{"level":10,"description":"Test Wazuh alert"},"agent":{"name":"wazuh-manager"}}'
+```
+
+## 6. Source of Truth Policy
+When this file conflicts with `cybersentinel_living_spec.md`, treat the canonical spec as correct and update this file in the same change.
