@@ -1,15 +1,15 @@
 from functools import lru_cache
 from typing import Optional
-
 from pydantic import BaseSettings, Field
-
 
 class Settings(BaseSettings):
     app_env: str = Field("dev", env="APP_ENV")
     debug_mode: bool = Field(False, env="DEBUG_MODE")
     detailed_logging: bool = Field(False, env="DETAILED_LOGGING")
 
-    mongo_uri: str = Field("", env="MONGO_URI")
+    mongo_user: str = Field("", env="MONGO_USER")
+    mongo_password: str = Field("", env="MONGO_PASSWORD")
+    mongo_host: str = Field("", env="MONGO_HOST")
     mongo_db: str = Field("cybersentinel", env="MONGO_DB")
 
     jwt_secret: str = Field("change_me", env="JWT_SECRET")
@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     cors_allow_origins: str = Field(
         "http://localhost:3000,http://127.0.0.1:3000", env="CORS_ALLOW_ORIGINS"
     )
-
     frontend_base_url: str = Field("http://localhost:3000", env="FRONTEND_BASE_URL")
 
     smtp_host: Optional[str] = Field(None, env="SMTP_HOST")
@@ -38,14 +37,12 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = Field(True, env="SMTP_USE_TLS")
     smtp_use_ssl: bool = Field(False, env="SMTP_USE_SSL")
     email_from: str = Field("no-reply@cybersentinel.local", env="EMAIL_FROM")
-
     email_verify_ttl_minutes: int = Field(60 * 24, env="EMAIL_VERIFY_TTL_MINUTES")
     password_reset_ttl_minutes: int = Field(15, env="PASSWORD_RESET_TTL_MINUTES")
 
     class Config:
         env_file = ".env"
         case_sensitive = False
-
 
 @lru_cache()
 def get_settings() -> Settings:

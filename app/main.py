@@ -5,7 +5,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.websocket import websocket_router
 from app.db.mongo import connect_to_mongo, close_mongo_connection, ensure_indexes
-from app.routes import alerts, auth, health, logs, ml, users
+from app.routes import alerts, auth, health, logs, ml, raw_wazuh_logs, users
 from app.services.ml_service import MLService
 
 
@@ -35,6 +35,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router, prefix="/api/health", tags=["health"])
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+    app.include_router(raw_wazuh_logs.router, prefix="/api", tags=["raw-wazuh"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
     app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
     app.include_router(users.router, prefix="/api/users", tags=["users"])

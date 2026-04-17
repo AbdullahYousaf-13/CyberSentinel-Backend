@@ -1,32 +1,29 @@
 from typing import Optional
-
+from urllib.parse import quote_plus
 from pymongo import ASCENDING, DESCENDING
-
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-
 from app.core.config import Settings
 
 _client: Optional[AsyncIOMotorClient] = None
 _db: Optional[AsyncIOMotorDatabase] = None
 
-
 async def connect_to_mongo(settings: Settings) -> None:
     global _client, _db
-    _client = AsyncIOMotorClient(settings.mongo_uri)
+    user = quote_plus(settings.mongo_user)
+    password = quote_plus(settings.mongo_password)
+    uri = f"mongodb+srv://{user}:{password}@{settings.mongo_host}/{settings.mongo_db}?retryWrites=true&w=majority"
+    _client = AsyncIOMotorClient(uri)
     _db = _client[settings.mongo_db]
-
 
 async def close_mongo_connection() -> None:
     global _client
     if _client:
         _client.close()
 
-
 def get_db() -> AsyncIOMotorDatabase:
     if _db is None:
         raise RuntimeError("MongoDB not initialized")
     return _db
-
 
 async def ensure_indexes() -> None:
     db = get_db()
@@ -40,3 +37,4 @@ async def ensure_indexes() -> None:
     await db.get_collection("alerts").create_index("severity")
     await db.get_collection("alerts").create_index("alert_type")
     await db.get_collection("alerts").create_index("log_id")
+    await db.get_collection("raw_wazuh_logs").create_index([("ingested_at", DESCENDING)])
