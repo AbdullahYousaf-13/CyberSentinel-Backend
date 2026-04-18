@@ -6,7 +6,7 @@ Environment:
   CS_BACKEND_URL      Base URL, e.g. https://your-host (no trailing slash required)
   WAZUH_INGEST_KEY    Same value as server WAZUH_INGEST_KEY (header x-ingestion-key)
   WAZUH_ARCHIVES_PATH Path to archives.json (default: /var/ossec/logs/archives/archives.json)
-  WAZUH_FORWARDER_OFFSET_PATH  File to persist byte offset (default: /var/lib/cybersentinel-wazuh-forwarder.offset.json)
+  WAZUH_FORWARDER_OFFSET_PATH  File to persist byte offset (default: ~/.cybersentinel-wazuh-forwarder.offset.json)
   WAZUH_FORWARDER_POLL_SEC     Poll interval in seconds (default: 4, clamped 3–5)
 """
 
@@ -220,7 +220,7 @@ def main() -> int:
     state_path = Path(
         os.environ.get(
             "WAZUH_FORWARDER_OFFSET_PATH",
-            "/var/lib/cybersentinel-wazuh-forwarder.offset.json",
+            str(Path.home() / ".cybersentinel-wazuh-forwarder.offset.json"),
         )
     )
     interval = _poll_interval_sec()

@@ -1,6 +1,11 @@
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 from pydantic import BaseSettings, Field
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_ENV_FILE = _PROJECT_ROOT / ".env"
 
 class Settings(BaseSettings):
     app_env: str = Field("dev", env="APP_ENV")
@@ -43,9 +48,12 @@ class Settings(BaseSettings):
     password_reset_ttl_minutes: int = Field(15, env="PASSWORD_RESET_TTL_MINUTES")
 
     class Config:
-        env_file = ".env"
+        env_file = str(_DEFAULT_ENV_FILE) if _DEFAULT_ENV_FILE.is_file() else ".env"
         case_sensitive = False
 
 @lru_cache()
 def get_settings() -> Settings:
+    # Empty OS env var overrides .env in pydantic BaseSettings; treat as unset so .env can load.
+    if os.environ.get("WAZUH_INGEST_KEY") == "":
+        os.environ.pop("WAZUH_INGEST_KEY", None)
     return Settings()

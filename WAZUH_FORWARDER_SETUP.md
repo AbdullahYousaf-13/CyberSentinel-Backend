@@ -34,7 +34,7 @@ Set runtime environment variables:
 export CS_BACKEND_URL="http://<WINDOWS_IP>:8000"
 export WAZUH_INGEST_KEY="your_shared_secret_here"
 export WAZUH_ARCHIVES_PATH="/var/ossec/logs/archives/archives.json"
-export WAZUH_FORWARDER_OFFSET_PATH="/var/lib/cybersentinel-wazuh-forwarder.offset.json"
+export WAZUH_FORWARDER_OFFSET_PATH="$HOME/.cybersentinel-wazuh-forwarder.offset.json"
 export WAZUH_FORWARDER_POLL_SEC="4"
 ```
 
@@ -75,7 +75,7 @@ WorkingDirectory=/opt/CyberSentinel-Backend
 Environment=CS_BACKEND_URL=http://<WINDOWS_IP>:8000
 Environment=WAZUH_INGEST_KEY=your_shared_secret_here
 Environment=WAZUH_ARCHIVES_PATH=/var/ossec/logs/archives/archives.json
-Environment=WAZUH_FORWARDER_OFFSET_PATH=/var/lib/cybersentinel-wazuh-forwarder.offset.json
+Environment=WAZUH_FORWARDER_OFFSET_PATH=/home/big_boss/.cybersentinel-wazuh-forwarder.offset.json
 Environment=WAZUH_FORWARDER_POLL_SEC=4
 ExecStart=/usr/bin/python3 /opt/CyberSentinel-Backend/scripts/wazuh_archives_forwarder.py
 Restart=always
