@@ -31,7 +31,7 @@ npm start
 - Verify shared Atlas data:
 ```powershell
 cd E:\Programing\CyberSentinel\CyberSentinel-Backend
-.\.venv\Scripts\python -c "from pymongo import MongoClient; from app.core.config import get_settings; s=get_settings(); db=MongoClient(s.mongo_uri)[s.mongo_db]; print('logs=',db.logs.count_documents({})); print('alerts=',db.alerts.count_documents({}))"
+.\.venv\Scripts\python -c "from pymongo import MongoClient; from app.core.config import get_settings; from app.db.mongo import resolve_mongo_uri; s=get_settings(); db=MongoClient(resolve_mongo_uri(s))[s.mongo_db]; print('logs=',db.logs.count_documents({})); print('alerts=',db.alerts.count_documents({}))"
 ```
 
 ## Wazuh VM Status

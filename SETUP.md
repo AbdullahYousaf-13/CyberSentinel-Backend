@@ -39,6 +39,15 @@ MODEL_INTEGRITY_REQUIRED=true
 ANOMALY_SCORE_THRESHOLD=0.65
 ```
 
+Optional fallback if you do not set `MONGO_URI`:
+
+```env
+MONGO_USER=<DB_USER>
+MONGO_PASSWORD=<DB_PASSWORD>
+MONGO_HOST=<ATLAS_HOST>
+MONGO_DB=cybersentinel
+```
+
 ## 3) Import your trained models into backend format (you must run)
 
 From `CyberSentinel-Backend` root:

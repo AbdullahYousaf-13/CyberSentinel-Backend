@@ -7,6 +7,10 @@ from app.core.websocket import websocket_router
 from app.db.mongo import connect_to_mongo, close_mongo_connection, ensure_indexes
 from app.routes import alerts, auth, health, logs, ml, raw_wazuh_logs, users
 from app.services.ml_service import MLService
+from app.services.raw_wazuh_pipeline_service import (
+    start_raw_wazuh_background_worker,
+    stop_raw_wazuh_background_worker,
+)
 
 
 def create_app() -> FastAPI:
@@ -47,9 +51,11 @@ def create_app() -> FastAPI:
         await connect_to_mongo(settings)
         await ensure_indexes()
         await MLService.initialize(settings)
+        await start_raw_wazuh_background_worker(settings)
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
+        await stop_raw_wazuh_background_worker()
         await close_mongo_connection()
 
     return app

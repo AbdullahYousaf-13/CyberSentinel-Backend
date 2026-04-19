@@ -34,6 +34,31 @@ class AlertService:
         await manager.broadcast({"event": "alert_created", "alert_id": alert_id, "severity": severity})
         return alert_id
 
+    async def create_or_get_alert(
+        self,
+        log_id: str,
+        alert_type: str,
+        severity: str,
+        model_version: str,
+        metadata: Dict[str, Any],
+        classification: Optional[str] = None,
+        anomaly_score: Optional[float] = None,
+    ) -> str:
+        payload = {
+            "created_at": datetime.utcnow(),
+            "log_id": log_id,
+            "alert_type": alert_type,
+            "severity": severity,
+            "classification": classification,
+            "anomaly_score": anomaly_score,
+            "model_version": model_version,
+            "metadata": metadata,
+        }
+        alert_id, created = await self._alerts.create_or_get_alert(payload)
+        if created:
+            await manager.broadcast({"event": "alert_created", "alert_id": alert_id, "severity": severity})
+        return alert_id
+
     async def list_alerts(
         self,
         limit: int = 50,

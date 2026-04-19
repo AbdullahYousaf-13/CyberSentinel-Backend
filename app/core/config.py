@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     debug_mode: bool = Field(False, env="DEBUG_MODE")
     detailed_logging: bool = Field(False, env="DETAILED_LOGGING")
 
+    mongo_uri: Optional[str] = Field(None, env="MONGO_URI")
     mongo_user: str = Field("", env="MONGO_USER")
     mongo_password: str = Field("", env="MONGO_PASSWORD")
     mongo_host: str = Field("", env="MONGO_HOST")
@@ -54,6 +55,8 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     # Empty OS env var overrides .env in pydantic BaseSettings; treat as unset so .env can load.
+    if os.environ.get("MONGO_URI") == "":
+        os.environ.pop("MONGO_URI", None)
     if os.environ.get("WAZUH_INGEST_KEY") == "":
         os.environ.pop("WAZUH_INGEST_KEY", None)
     return Settings()

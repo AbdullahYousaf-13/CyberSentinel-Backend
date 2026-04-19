@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Dict, List
+import json
+from typing import Any, Dict, List, Tuple
 
 import httpx
 from fastapi import HTTPException, status
@@ -43,23 +44,14 @@ class MLService:
         if not logs:
             return {"processed": 0, "alerts": 0}
 
-        features = self._feature_extractor.transform(logs)
-        model_api_url = (self._settings.model_api_url or "").strip()
-        if model_api_url:
-            results = await self._predict_with_cloud_model(model_api_url, features)
-            model_version = "cloud-api"
-        else:
-            if self._engine is None:
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Models not initialized")
-            results = self._engine.predict(features, self._settings.anomaly_score_threshold)["results"]
-            model_version = self._model_version
+        results, model_version = await self.infer_logs(logs)
 
         alerts_created = 0
         for log, result in zip(logs, results):
             if result["alert_type"] == "benign":
                 continue
             severity = "high" if result["alert_type"] == "known_attack" else "medium"
-            await self._alerts.create_alert(
+            await self._alerts.create_or_get_alert(
                 log_id=str(log["_id"]),
                 alert_type=result["alert_type"],
                 severity=severity,
@@ -71,6 +63,21 @@ class MLService:
             alerts_created += 1
         return {"processed": len(logs), "alerts": alerts_created}
 
+    async def infer_logs(self, logs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
+        features = self._feature_extractor.transform(logs)
+        model_api_url = (self._settings.model_api_url or "").strip()
+        if model_api_url:
+            return await self._predict_with_cloud_model(model_api_url, features), "cloud-api"
+        if self._engine is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Models not initialized")
+        return self._engine.predict(features, self._settings.anomaly_score_threshold)["results"], self._model_version
+
+    async def infer_single_log(self, log: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+        results, model_version = await self.infer_logs([log])
+        if not results:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Inference result is empty")
+        return results[0], model_version
+
     async def _predict_with_cloud_model(self, model_api_url: str, features) -> List[Dict[str, Any]]:
         predict_url = f"{model_api_url.rstrip('/')}/predict"
         timeout = max(1, self._settings.model_api_timeout_seconds)
@@ -80,12 +87,7 @@ class MLService:
             for feature_row in features:
                 payload = feature_row.tolist()
                 try:
-                    response = await client.post(predict_url, json=payload)
-                    if response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
-                        # Backward compatibility for APIs that expect {"sample": [...]}
-                        response = await client.post(predict_url, json={"sample": payload})
-                    response.raise_for_status()
-                    prediction = str(response.json().get("prediction", "")).strip()
+                    prediction = await self._request_cloud_prediction(client, predict_url, payload)
                 except httpx.HTTPError as exc:
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -93,6 +95,85 @@ class MLService:
                     ) from exc
                 results.append(self._map_cloud_prediction(prediction))
         return results
+
+    async def _request_cloud_prediction(
+        self,
+        client: httpx.AsyncClient,
+        predict_url: str,
+        payload: List[float],
+    ) -> str:
+        attempts = [
+            ("json-list", {"json": payload}),
+            ("json-object-sample", {"json": {"sample": payload}}),
+            ("json-object-features", {"json": {"features": payload}}),
+            ("json-object-data", {"json": {"data": payload}}),
+            # Some deployments expose `sample: list` as form-data and need repeated `sample` fields.
+            ("form-repeated-sample", {"data": [("sample", str(v)) for v in payload]}),
+            ("form-json-sample", {"data": {"sample": json.dumps(payload)}}),
+        ]
+
+        last_http_error: httpx.HTTPStatusError | None = None
+        for name, kwargs in attempts:
+            response = await client.post(predict_url, **kwargs)
+            if response.status_code >= 400:
+                if response.status_code in {
+                    status.HTTP_400_BAD_REQUEST,
+                    status.HTTP_404_NOT_FOUND,
+                    status.HTTP_405_METHOD_NOT_ALLOWED,
+                    status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                }:
+                    logger.debug(
+                        "Cloud prediction attempt %s failed with %s: %s",
+                        name,
+                        response.status_code,
+                        response.text[:300],
+                    )
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        last_http_error = exc
+                    continue
+                response.raise_for_status()
+
+            try:
+                body = response.json()
+            except ValueError:
+                logger.debug("Cloud prediction attempt %s returned non-JSON body", name)
+                continue
+
+            prediction = self._extract_prediction_value(body)
+            if prediction:
+                return prediction
+
+        if last_http_error:
+            raise last_http_error
+        raise httpx.HTTPError("Cloud model API returned no usable prediction")
+
+    @staticmethod
+    def _extract_prediction_value(body: Any) -> str:
+        if isinstance(body, dict):
+            for key in ("prediction", "result", "label", "class"):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+                if isinstance(value, (int, float)):
+                    return str(value)
+                if isinstance(value, list) and value:
+                    first = value[0]
+                    if isinstance(first, str):
+                        return first.strip()
+                    if isinstance(first, (int, float)):
+                        return str(first)
+            return ""
+        if isinstance(body, list) and body:
+            first = body[0]
+            if isinstance(first, str):
+                return first.strip()
+            if isinstance(first, (int, float)):
+                return str(first)
+        return ""
 
     def _map_cloud_prediction(self, prediction: str) -> Dict[str, Any]:
         normalized = prediction.upper()

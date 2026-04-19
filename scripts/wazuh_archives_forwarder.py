@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+import hashlib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -67,9 +68,12 @@ def _partition_lines(buf: bytes) -> Tuple[List[bytes], bytes]:
     return lines, incomplete
 
 
-def _parse_log_lines(raw_lines: List[bytes]) -> List[Dict[str, Any]]:
+def _build_log_entries(raw_lines: List[bytes], archive_path: str, start_offset: int) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    cursor = start_offset
     for line in raw_lines:
+        line_start = cursor
+        cursor += len(line) + 1
         if not line.strip():
             continue
         try:
@@ -77,7 +81,16 @@ def _parse_log_lines(raw_lines: List[bytes]) -> List[Dict[str, Any]]:
         except (json.JSONDecodeError, UnicodeDecodeError):
             continue
         if isinstance(obj, dict):
-            out.append(obj)
+            out.append(
+                {
+                    "payload": obj,
+                    "ingestMeta": {
+                        "archivePath": archive_path,
+                        "byteOffset": line_start,
+                        "lineHash": hashlib.sha256(line).hexdigest(),
+                    },
+                }
+            )
     return out
 
 
@@ -200,7 +213,7 @@ def cycle_once(
             return
 
     raw_lines, incomplete = _partition_lines(chunk)
-    entries = _parse_log_lines(raw_lines)
+    entries = _build_log_entries(raw_lines, ap_str, byte_offset)
     sent_at_ms = int(time.time() * 1000)
 
     if entries:

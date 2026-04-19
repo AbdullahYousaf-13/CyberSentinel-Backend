@@ -13,6 +13,16 @@ class AlertRepository:
         result = await self._collection.insert_one(payload)
         return str(result.inserted_id)
 
+    async def create_or_get_alert(self, payload: Dict[str, Any]) -> tuple[str, bool]:
+        query = {"log_id": payload["log_id"]}
+        result = await self._collection.update_one(query, {"$setOnInsert": payload}, upsert=True)
+        if result.upserted_id is not None:
+            return str(result.upserted_id), True
+        existing = await self._collection.find_one(query, {"_id": 1})
+        if not existing:
+            raise RuntimeError("Alert upsert failed")
+        return str(existing["_id"]), False
+
     async def list_alerts(
         self,
         limit: int = 50,

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
@@ -12,6 +13,18 @@ class LogRepository:
     async def create_log(self, payload: Dict[str, Any]) -> str:
         result = await self._collection.insert_one(payload)
         return str(result.inserted_id)
+
+    async def upsert_engineered_log(self, raw_ingest_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        query = {"metadata.raw_ingest_key": raw_ingest_key}
+        result = await self._collection.update_one(query, {"$setOnInsert": payload}, upsert=True)
+        if result.upserted_id is not None:
+            created = await self._collection.find_one({"_id": result.upserted_id})
+            if created:
+                return created
+        found = await self._collection.find_one(query)
+        if not found:
+            raise RuntimeError("Engineered log upsert failed")
+        return found
 
     async def fetch_batch(self, limit: int) -> List[Dict[str, Any]]:
         cursor = self._collection.find().sort("timestamp", 1).limit(limit)
@@ -38,3 +51,28 @@ class LogRepository:
 
     async def get_by_id(self, log_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(log_id)})
+
+    async def mark_ml_done(self, log_id: ObjectId, result: Dict[str, Any], model_version: str) -> None:
+        await self._collection.update_one(
+            {"_id": log_id},
+            {
+                "$set": {
+                    "ml_status": "done",
+                    "ml_processed_at": datetime.utcnow(),
+                    "ml_result": result,
+                    "ml_model_version": model_version,
+                }
+            },
+        )
+
+    async def mark_ml_error(self, log_id: ObjectId, error: str) -> None:
+        await self._collection.update_one(
+            {"_id": log_id},
+            {
+                "$set": {
+                    "ml_status": "error",
+                    "ml_processed_at": datetime.utcnow(),
+                    "ml_error": error[:1000],
+                }
+            },
+        )

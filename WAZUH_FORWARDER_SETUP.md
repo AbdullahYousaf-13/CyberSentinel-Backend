@@ -99,6 +99,7 @@ sudo systemctl status cybersentinel-wazuh-forwarder
 - Reads only appended bytes using file offset tracking
 - Detects log rotation (file size shrink) and safely resets offset
 - Parses line-by-line JSON and discards invalid JSON lines
+- Wraps each raw payload with idempotency metadata (`archivePath`, `byteOffset`, `lineHash`)
 - Sends batches in near real-time (3-5 sec)
 - Retries failed requests with exponential backoff
 - Keeps request limits within:

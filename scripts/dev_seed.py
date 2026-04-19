@@ -14,6 +14,7 @@ if ROOT_DIR not in sys.path:
 
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
+from app.db.mongo import resolve_mongo_uri
 
 
 def ensure_admin_user(db, email: str, password: str) -> Dict[str, Any]:
@@ -93,7 +94,7 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = get_settings()
-    client = MongoClient(settings.mongo_uri)
+    client = MongoClient(resolve_mongo_uri(settings))
     db = client[settings.mongo_db]
 
     user = ensure_admin_user(db, args.email, args.password)

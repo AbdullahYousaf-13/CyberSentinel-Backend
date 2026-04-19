@@ -1,12 +1,12 @@
 import secrets
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel
 
 from app.core.config import get_settings
-from app.db.repositories.raw_wazuh_log_repository import RawWazuhLogRepository
+from app.services.raw_wazuh_pipeline_service import RawWazuhPipelineService
 
 router = APIRouter()
 
@@ -17,7 +17,7 @@ _MAX_PAYLOAD_BYTES = 1024 * 1024
 class RawWazuhIngestBody(BaseModel):
     source: str
     type: str
-    logs: List[Dict[str, Any]]
+    logs: List[Any]
     sentAt: int
 
 
@@ -59,6 +59,5 @@ async def ingest_raw_wazuh_logs(
     if not x_ingestion_key or not secrets.compare_digest(x_ingestion_key, configured):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid ingestion key")
 
-    repo = RawWazuhLogRepository()
-    inserted = await repo.insert_batch(body.logs)
-    return {"inserted": inserted}
+    pipeline = RawWazuhPipelineService(settings)
+    return await pipeline.ingest_batch(body.logs, body.sentAt)
