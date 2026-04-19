@@ -48,9 +48,9 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup() -> None:
+        await MLService.initialize(settings)
         await connect_to_mongo(settings)
         await ensure_indexes()
-        await MLService.initialize(settings)
         await start_raw_wazuh_background_worker(settings)
 
     @app.on_event("shutdown")

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     wazuh_ingest_key: Optional[str] = Field(None, env="WAZUH_INGEST_KEY")
 
+    # Legacy local-model settings kept for backward env compatibility.
     model_dir: str = Field("app/ml/models", env="MODEL_DIR")
     model_integrity_required: bool = Field(True, env="MODEL_INTEGRITY_REQUIRED")
     anomaly_score_threshold: float = Field(0.65, env="ANOMALY_SCORE_THRESHOLD")
@@ -59,4 +60,6 @@ def get_settings() -> Settings:
         os.environ.pop("MONGO_URI", None)
     if os.environ.get("WAZUH_INGEST_KEY") == "":
         os.environ.pop("WAZUH_INGEST_KEY", None)
+    if os.environ.get("MODEL_API_URL") == "":
+        os.environ.pop("MODEL_API_URL", None)
     return Settings()

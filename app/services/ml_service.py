@@ -1,6 +1,7 @@
 import logging
 import json
 from typing import Any, Dict, List, Tuple
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException, status
@@ -8,31 +9,23 @@ from fastapi import HTTPException, status
 from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
 from app.ml.features.feature_extractor import FeatureExtractor
-from app.ml.inference.inference_engine import InferenceEngine
-from app.ml.retraining.retraining_manager import RetrainingManager
-from app.ml.training.training_service import train_models
 from app.services.alert_service import AlertService
 
 logger = logging.getLogger(__name__)
 
 
 class MLService:
-    _engine: InferenceEngine = None
     _feature_extractor = FeatureExtractor()
-    _model_version: str = ""
+    _model_version: str = "cloud-api"
 
     @classmethod
     async def initialize(cls, settings: Settings) -> None:
-        manager = RetrainingManager(settings.model_dir)
-        try:
-            cls._model_version = manager.get_active_version()
-            cls._engine = InferenceEngine(settings.model_dir, settings.model_integrity_required)
-            cls._engine.load_version(cls._model_version)
-        except FileNotFoundError:
-            if settings.model_api_url:
-                logger.info("Model registry not initialized; using external model API at %s", settings.model_api_url)
-            else:
-                logger.warning("Model registry not initialized; inference will be unavailable until retraining.")
+        model_api_url = cls.get_required_model_api_url(settings)
+        await cls.validate_cloud_model_reachable(
+            model_api_url, settings.model_api_timeout_seconds
+        )
+        cls._model_version = "cloud-api"
+        logger.info("Cloud model API is ready at %s", model_api_url)
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -65,18 +58,61 @@ class MLService:
 
     async def infer_logs(self, logs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
         features = self._feature_extractor.transform(logs)
-        model_api_url = (self._settings.model_api_url or "").strip()
-        if model_api_url:
-            return await self._predict_with_cloud_model(model_api_url, features), "cloud-api"
-        if self._engine is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Models not initialized")
-        return self._engine.predict(features, self._settings.anomaly_score_threshold)["results"], self._model_version
+        model_api_url = self.get_required_model_api_url(self._settings)
+        return (
+            await self._predict_with_cloud_model(model_api_url, features),
+            self._model_version,
+        )
 
     async def infer_single_log(self, log: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
         results, model_version = await self.infer_logs([log])
         if not results:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Inference result is empty")
         return results[0], model_version
+
+    @staticmethod
+    def get_required_model_api_url(settings: Settings) -> str:
+        model_api_url = (settings.model_api_url or "").strip()
+        if not model_api_url:
+            raise RuntimeError(
+                "MODEL_API_URL is required in cloud-only mode. "
+                "Example: http://127.0.0.1:8010"
+            )
+
+        parsed = urlparse(model_api_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise RuntimeError(
+                "MODEL_API_URL must be an absolute http(s) URL. "
+                f"Received: {model_api_url}"
+            )
+        return model_api_url.rstrip("/")
+
+    @classmethod
+    async def validate_cloud_model_reachable(
+        cls, model_api_url: str, timeout_seconds: int
+    ) -> None:
+        timeout = max(1, timeout_seconds)
+        health_candidates = [f"{model_api_url}/health", f"{model_api_url}/"]
+        errors: List[str] = []
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for health_url in health_candidates:
+                try:
+                    response = await client.get(health_url)
+                except httpx.HTTPError as exc:
+                    errors.append(
+                        f"{health_url} -> request failed: {exc.__class__.__name__}: {exc}"
+                    )
+                    continue
+
+                if response.status_code < 400:
+                    return
+                errors.append(f"{health_url} -> HTTP {response.status_code}")
+
+        raise RuntimeError(
+            "Cloud model API is not reachable or not healthy. "
+            f"Base URL: {model_api_url}. Checks: {'; '.join(errors)}"
+        )
 
     async def _predict_with_cloud_model(self, model_api_url: str, features) -> List[Dict[str, Any]]:
         predict_url = f"{model_api_url.rstrip('/')}/predict"
@@ -195,22 +231,3 @@ class MLService:
             "classification": prediction or None,
             "score": self._settings.anomaly_score_threshold,
         }
-
-    def retrain_models(self, features, labels, reason: str) -> str:
-        if features is None or labels is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing training data")
-        iforest, rf = train_models(features, labels)
-        manager = RetrainingManager(self._settings.model_dir)
-        version = manager.save_new_version(iforest, rf, reason)
-        self._model_version = version
-        if self._engine is None:
-            self._engine = InferenceEngine(self._settings.model_dir, self._settings.model_integrity_required)
-        self._engine.load_version(version)
-        logger.info("Retrained models and activated version %s", version)
-        return version
-
-    def rollback(self, target_version: str) -> None:
-        manager = RetrainingManager(self._settings.model_dir)
-        manager.rollback(target_version)
-        self._model_version = target_version
-        self._engine.load_version(target_version)

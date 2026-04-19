@@ -16,11 +16,29 @@ Edit `CyberSentinel-Backend/.env` on both machines:
 ```env
 MONGO_URI=mongodb+srv://<DB_USER>:<DB_PASS>@<CLUSTER_URL>/?retryWrites=true&w=majority
 MONGO_DB=cybersentinel
+MODEL_API_URL=http://127.0.0.1:8010
 ```
 
 Keep other values per developer (JWT secret, SMTP, etc.) as needed.
 
-## 3) Run backend locally (both PCs)
+## 3) Run cloud model API locally (both PCs)
+
+Place model files manually on both PCs:
+
+1. `CyberSentinel-Cloud-Model/models/isolation_forest.pkl`
+2. `CyberSentinel-Cloud-Model/models/random_forest.pkl`
+
+Start cloud model:
+
+```powershell
+cd E:\Programing\CyberSentinel\CyberSentinel-Cloud-Model
+py -3.11 -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app:app --reload --host 0.0.0.0 --port 8010
+```
+
+## 4) Run backend locally (both PCs)
 
 ```powershell
 cd E:\Programing\CyberSentinel\CyberSentinel-Backend
@@ -30,12 +48,12 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## 4) Run frontend locally (both PCs)
+## 5) Run frontend locally (both PCs)
 
 `CyberSentinel-Frontend/.env`:
 
 ```env
-REACT_APP_API_BASE_URL=http://localhost:8000
+REACT_APP_API_BASE_URL=http://127.0.0.1:8000
 ```
 
 Start:
@@ -46,7 +64,7 @@ npm install
 npm start
 ```
 
-## 5) Migrate current local DB to Atlas (optional, one time)
+## 6) Migrate current local DB to Atlas (optional, one time)
 
 From your machine with current source Mongo data:
 
@@ -55,7 +73,7 @@ mongodump --uri "<SOURCE_MONGO_URI>" --db cybersentinel --out .\dump
 mongorestore --uri "mongodb+srv://<DB_USER>:<DB_PASS>@<CLUSTER_URL>/?retryWrites=true&w=majority" --nsInclude "cybersentinel.*" .\dump\cybersentinel
 ```
 
-## 6) Basic DB queries (where to run)
+## 7) Basic DB queries (where to run)
 
 You do not need to work only in Atlas web UI.
 Keep running the app locally in terminal; Atlas is only the remote database.
@@ -63,6 +81,11 @@ Keep running the app locally in terminal; Atlas is only the remote database.
 Local terminal workflow:
 
 ```powershell
+# Cloud model
+cd E:\Programing\CyberSentinel\CyberSentinel-Cloud-Model
+.\.venv\Scripts\activate
+uvicorn app:app --reload --host 0.0.0.0 --port 8010
+
 # Backend
 cd E:\Programing\CyberSentinel\CyberSentinel-Backend
 .\.venv\Scripts\activate

@@ -1,5 +1,4 @@
-import numpy as np
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.config import get_settings
 from app.schemas.ml import BatchInferenceRequest, RollbackRequest, TrainingDataRequest
@@ -18,23 +17,23 @@ async def batch_infer(
     return await service.run_batch_inference(payload.batch_size)
 
 
-@router.post("/retrain", status_code=status.HTTP_200_OK)
+@router.post("/retrain", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 async def retrain_models(
-    payload: TrainingDataRequest,
+    _payload: TrainingDataRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    service = MLService(get_settings())
-    features = np.array(payload.features, dtype=float)
-    labels = np.array(payload.labels)
-    version = service.retrain_models(features, labels, payload.reason)
-    return {"version": version}
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Retraining is disabled in cloud-only mode. Retrain models in the cloud-model service workflow.",
+    )
 
 
-@router.post("/rollback", status_code=status.HTTP_200_OK)
+@router.post("/rollback", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 async def rollback_models(
-    payload: RollbackRequest,
+    _payload: RollbackRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    service = MLService(get_settings())
-    service.rollback(payload.target_version)
-    return {"active_version": payload.target_version}
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Rollback is disabled in cloud-only mode.",
+    )
