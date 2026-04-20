@@ -16,5 +16,6 @@ class IngestionService:
             "metadata": payload.get("metadata", {}),
             "severity": payload.get("severity"),
             "ingested_at": datetime.utcnow(),
+            "ml_status": "pending",
         }
         return await self._logs.create_log(normalized)

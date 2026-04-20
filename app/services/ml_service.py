@@ -37,24 +37,38 @@ class MLService:
         if not logs:
             return {"processed": 0, "alerts": 0}
 
-        results, model_version = await self.infer_logs(logs)
-
+        processed_count = 0
         alerts_created = 0
-        for log, result in zip(logs, results):
+        for log in logs:
+            processed_count += 1
+            log_id = log["_id"]
+            try:
+                result, model_version = await self.infer_single_log(log)
+            except Exception as exc:  # noqa: BLE001
+                await self._logs.mark_ml_error(log_id, str(exc))
+                logger.exception("Batch inference failed for log %s", log_id)
+                continue
+
+            await self._logs.mark_ml_done(log_id, result, model_version)
+
             if result["alert_type"] == "benign":
                 continue
+
             severity = "high" if result["alert_type"] == "known_attack" else "medium"
             await self._alerts.create_or_get_alert(
-                log_id=str(log["_id"]),
+                log_id=str(log_id),
                 alert_type=result["alert_type"],
                 severity=severity,
                 model_version=model_version,
-                metadata={"source": log.get("source"), "message": log.get("message")[:200]},
+                metadata={
+                    "source": log.get("source"),
+                    "message": (log.get("message") or "")[:200],
+                },
                 classification=result.get("classification"),
                 anomaly_score=float(result.get("score", 0.0)),
             )
             alerts_created += 1
-        return {"processed": len(logs), "alerts": alerts_created}
+        return {"processed": processed_count, "alerts": alerts_created}
 
     async def infer_logs(self, logs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
         features = self._feature_extractor.transform(logs)

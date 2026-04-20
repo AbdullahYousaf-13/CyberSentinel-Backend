@@ -27,7 +27,14 @@ class LogRepository:
         return found
 
     async def fetch_batch(self, limit: int) -> List[Dict[str, Any]]:
-        cursor = self._collection.find().sort("timestamp", 1).limit(limit)
+        query = {
+            "$or": [
+                {"ml_status": {"$exists": False}},
+                {"ml_status": "pending"},
+                {"ml_status": "error"},
+            ]
+        }
+        cursor = self._collection.find(query).sort("timestamp", 1).limit(limit)
         return await cursor.to_list(length=limit)
 
     async def list_logs(
@@ -61,7 +68,8 @@ class LogRepository:
                     "ml_processed_at": datetime.utcnow(),
                     "ml_result": result,
                     "ml_model_version": model_version,
-                }
+                },
+                "$unset": {"ml_error": ""},
             },
         )
 
@@ -73,6 +81,6 @@ class LogRepository:
                     "ml_status": "error",
                     "ml_processed_at": datetime.utcnow(),
                     "ml_error": error[:1000],
-                }
+                },
             },
         )
