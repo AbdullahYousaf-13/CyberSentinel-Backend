@@ -534,12 +534,12 @@ There is currently no explicit index creation for `agent_audit`.
 
 Implemented deployment assets:
 
-- `docker/Dockerfile`
-- `docker-compose.yml`
+- `SETUP.md`
+- `.env`
 
-Current Docker scope:
+Current runtime scope:
 
-- Backend container only
+- Backend process only
 - MongoDB is expected to be external
 - Frontend is expected to be run separately
 
@@ -647,4 +647,3 @@ At the time of this update, older docs in the repo include stale assumptions tha
 - the older backend living spec
 - deployment notes that reference an outdated feature-count assumption
 - UI pages that imply live features which are still mocked
-

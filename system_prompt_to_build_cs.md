@@ -24,7 +24,7 @@ The system:
 - Pushes alerts to frontend via WebSockets
 - Provides secure authentication with 2FA
 - Includes an optional Investigation Planning Agent
-- Is fully Dockerized
+- Supports local host-based runtime
 - Uses MongoDB
 
 This system is NOT:
@@ -45,7 +45,7 @@ ML: scikit-learn (Isolation Forest, Random Forest)
 Realtime: WebSockets
 Auth: JWT + Email/Password + TOTP
 Agentic AI: External, sandboxed agent service
-Deployment: Docker + docker-compose
+Deployment: Local host runtime
 
 --------------------------------------------------
 CORE ARCHITECTURAL PRINCIPLES
@@ -173,9 +173,6 @@ cybersentinel-backend/
 │   ├── utils/
 │   └── tests/
 │
-├── docker/
-│   └── Dockerfile
-├── docker-compose.yml
 ├── requirements.txt
 ├── README.md
 ├── SETUP.md
