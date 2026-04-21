@@ -4,13 +4,20 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.agent import InvestigationPlanResponse
-from app.schemas.alert import AlertResponse
+from app.schemas.alert import AlertAnalyticsResponse, AlertResponse
 from app.services.alert_service import AlertService
 from app.services.auth_service import get_current_user
 from app.services.investigation_agent_service import InvestigationAgentService
 from app.core.config import get_settings
 
 router = APIRouter()
+
+
+def _response_classification(alert: dict) -> Optional[str]:
+    raw = alert.get("classification")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
 
 
 @router.get("/", response_model=list[AlertResponse])
@@ -45,13 +52,22 @@ async def list_alerts(
                 log_id=alert["log_id"],
                 alert_type=alert["alert_type"],
                 severity=alert["severity"],
-                classification=alert.get("classification"),
+                classification=_response_classification(alert),
                 anomaly_score=alert.get("anomaly_score"),
                 model_version=alert["model_version"],
                 metadata=alert.get("metadata", {}),
             )
         )
     return response
+
+
+@router.get("/analytics", response_model=AlertAnalyticsResponse)
+async def get_alert_analytics(
+    current_user: dict = Depends(get_current_user),
+) -> AlertAnalyticsResponse:
+    service = AlertService()
+    analytics = await service.get_alert_analytics()
+    return AlertAnalyticsResponse(**analytics)
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)
@@ -69,7 +85,7 @@ async def get_alert(
         log_id=alert["log_id"],
         alert_type=alert["alert_type"],
         severity=alert["severity"],
-        classification=alert.get("classification"),
+        classification=_response_classification(alert),
         anomaly_score=alert.get("anomaly_score"),
         model_version=alert["model_version"],
         metadata=alert.get("metadata", {}),

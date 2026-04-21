@@ -68,6 +68,10 @@ async def ensure_indexes() -> None:
     await db.get_collection("user").create_index("email", unique=True)
     await db.get_collection("user").create_index("email_verification_token_hash")
     await db.get_collection("user").create_index("password_reset_code_hash")
+    await db.get_collection("user").create_index(
+        [("notification_prefs.frequency", ASCENDING), ("notification_prefs.next_digest_at", ASCENDING)]
+    )
+    await db.get_collection("user").create_index("notification_prefs.email_enabled")
     await db.get_collection("logs").create_index([("timestamp", DESCENDING)])
     await db.get_collection("logs").create_index("source")
     await db.get_collection("logs").create_index("severity")

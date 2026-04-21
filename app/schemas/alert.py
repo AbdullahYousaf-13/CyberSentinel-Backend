@@ -14,3 +14,30 @@ class AlertResponse(BaseModel):
     anomaly_score: Optional[float] = None
     model_version: str
     metadata: Dict[str, Any]
+
+
+class AlertTrendPointResponse(BaseModel):
+    bucket_start: datetime
+    bucket_end: datetime
+    label: str
+    count: int
+
+
+class AlertTrendResponse(BaseModel):
+    unit: str
+    points: list[AlertTrendPointResponse]
+
+
+class AlertDistributionPointResponse(BaseModel):
+    key: str
+    label: str
+    count: int
+    percentage: float
+
+
+class AlertAnalyticsResponse(BaseModel):
+    trend: AlertTrendResponse
+    distribution: list[AlertDistributionPointResponse]
+    total_alerts: int
+    first_alert_at: Optional[datetime] = None
+    last_alert_at: Optional[datetime] = None

@@ -14,12 +14,120 @@ from app.db.repositories.log_repository import LogRepository
 
 router = APIRouter()
 
+_AUTH_PATTERN = r"(auth|sshd|login|secure)"
+_SYSTEM_PATTERN = r"(kern|kernel|syslog|system)"
+_CHANNEL_VALUES = {"network", "login", "file", "system", "general"}
+
+
+def _non_empty_field_filter(field: str) -> Dict[str, Any]:
+    return {
+        "$and": [
+            {field: {"$exists": True}},
+            {field: {"$nin": [None, ""]}},
+        ]
+    }
+
+
+def _network_presence_filter() -> Dict[str, Any]:
+    return {
+        "$or": [
+            _non_empty_field_filter("metadata.data.srcip"),
+            _non_empty_field_filter("metadata.srcip"),
+            _non_empty_field_filter("metadata.raw_wazuh_payload.data.srcip"),
+            _non_empty_field_filter("metadata.raw_wazuh_payload.srcip"),
+            _non_empty_field_filter("metadata.data.dstip"),
+            _non_empty_field_filter("metadata.dstip"),
+            _non_empty_field_filter("metadata.raw_wazuh_payload.data.dstip"),
+            _non_empty_field_filter("metadata.raw_wazuh_payload.dstip"),
+        ]
+    }
+
+
+def _decoder_regex_filter(pattern: str) -> Dict[str, Any]:
+    regex = {"$regex": pattern, "$options": "i"}
+    return {
+        "$or": [
+            {"metadata.decoder.name": regex},
+            {"metadata.raw_wazuh_payload.decoder.name": regex},
+        ]
+    }
+
+
+def _source_app_filter_clause(source_app: str) -> Optional[Dict[str, Any]]:
+    normalized_source_app = source_app.strip().lower()
+    if not normalized_source_app:
+        return None
+
+    auth_filter = {
+        "$or": [
+            {"metadata.location": {"$regex": _AUTH_PATTERN, "$options": "i"}},
+            {"metadata.raw_wazuh_payload.location": {"$regex": _AUTH_PATTERN, "$options": "i"}},
+            {"source": {"$regex": _AUTH_PATTERN, "$options": "i"}},
+        ]
+    }
+    system_filter = {
+        "$or": [
+            {"metadata.location": {"$regex": _SYSTEM_PATTERN, "$options": "i"}},
+            {"metadata.raw_wazuh_payload.location": {"$regex": _SYSTEM_PATTERN, "$options": "i"}},
+            {"source": {"$regex": _SYSTEM_PATTERN, "$options": "i"}},
+        ]
+    }
+
+    if normalized_source_app == "authentication":
+        return auth_filter
+    if normalized_source_app == "system":
+        return system_filter
+    if normalized_source_app == "general system":
+        return {"$and": [{"$nor": [auth_filter]}, {"$nor": [system_filter]}]}
+
+    return {
+        "$or": [
+            {"metadata.location": {"$regex": f"^{re.escape(source_app.strip())}", "$options": "i"}},
+            {"metadata.raw_wazuh_payload.location": {"$regex": f"^{re.escape(source_app.strip())}", "$options": "i"}},
+            {"source": {"$regex": f"^{re.escape(source_app.strip())}", "$options": "i"}},
+        ]
+    }
+
+
+def _channel_filter_clause(channel: str) -> Optional[Dict[str, Any]]:
+    normalized_channel = channel.strip().lower()
+    if not normalized_channel:
+        return None
+    if normalized_channel not in _CHANNEL_VALUES:
+        return None
+
+    network_filter = _network_presence_filter()
+    if normalized_channel == "network":
+        return network_filter
+
+    mapped_decoder = {
+        "login": "sshd",
+        "file": "syscheck",
+        "system": "kernel",
+    }
+    if normalized_channel in mapped_decoder:
+        return {
+            "$and": [
+                {"$nor": [network_filter]},
+                _decoder_regex_filter(f"^{mapped_decoder[normalized_channel]}$"),
+            ]
+        }
+
+    return {
+        "$and": [
+            {"$nor": [network_filter]},
+            {"$nor": [_decoder_regex_filter(r"^(sshd|syscheck|kernel)$")]},
+        ]
+    }
+
 
 def _build_log_filters(
     source: Optional[str],
     severity: Optional[str],
     agent: Optional[str],
     origin: Optional[str],
+    source_app: Optional[str],
+    channel: Optional[str],
     start_ts: Optional[datetime],
     end_ts: Optional[datetime],
 ) -> dict:
@@ -57,6 +165,18 @@ def _build_log_filters(
             }
         )
 
+    normalized_source_app = source_app.strip() if source_app else ""
+    if normalized_source_app:
+        source_app_clause = _source_app_filter_clause(normalized_source_app)
+        if source_app_clause:
+            conditions.append(source_app_clause)
+
+    normalized_channel = channel.strip() if channel else ""
+    if normalized_channel:
+        channel_clause = _channel_filter_clause(normalized_channel)
+        if channel_clause:
+            conditions.append(channel_clause)
+
     if start_ts or end_ts:
         timestamp_filter: Dict[str, datetime] = {}
         if start_ts:
@@ -72,6 +192,29 @@ def _build_log_filters(
     return {"$and": conditions}
 
 
+def _to_log_response(log: Dict[str, Any]) -> LogResponse:
+    context = build_normalized_log_context(log)
+    return LogResponse(
+        id=str(log["_id"]),
+        timestamp=log["timestamp"],
+        source=log["source"],
+        message=log["message"],
+        metadata=log.get("metadata", {}),
+        severity=log.get("severity"),
+        event_id=context["event_id"],
+        event_time=context["event_time"],
+        agent_name=context["agent_name"],
+        event_origin=context["event_origin"],
+        decoder_name=context["decoder_name"],
+        network=context["network"],
+        message_normalized=context["message_normalized"],
+        source_app=context["source_app"],
+        source_ip=context["source_ip"],
+        destination_ip=context["destination_ip"],
+        channel=context["channel"],
+    )
+
+
 @router.get("/", response_model=list[LogResponse])
 async def list_logs(
     current_user: dict = Depends(get_current_user),
@@ -81,6 +224,8 @@ async def list_logs(
     severity: Optional[str] = None,
     agent: Optional[str] = None,
     origin: Optional[str] = None,
+    source_app: Optional[str] = None,
+    channel: Optional[str] = None,
     start_ts: Optional[datetime] = None,
     end_ts: Optional[datetime] = None,
 ) -> list[LogResponse]:
@@ -90,31 +235,13 @@ async def list_logs(
         severity=severity,
         agent=agent,
         origin=origin,
+        source_app=source_app,
+        channel=channel,
         start_ts=start_ts,
         end_ts=end_ts,
     )
     logs = await repo.list_logs(limit=limit, offset=offset, filters=filters)
-    response = []
-    for log in logs:
-        context = build_normalized_log_context(log)
-        response.append(
-            LogResponse(
-                id=str(log["_id"]),
-                timestamp=log["timestamp"],
-                source=log["source"],
-                message=log["message"],
-                metadata=log.get("metadata", {}),
-                severity=log.get("severity"),
-                event_id=context["event_id"],
-                event_time=context["event_time"],
-                agent_name=context["agent_name"],
-                event_origin=context["event_origin"],
-                decoder_name=context["decoder_name"],
-                network=context["network"],
-                message_normalized=context["message_normalized"],
-            )
-        )
-    return response
+    return [_to_log_response(log) for log in logs]
 
 
 @router.get("/count")
@@ -124,6 +251,8 @@ async def count_logs(
     severity: Optional[str] = None,
     agent: Optional[str] = None,
     origin: Optional[str] = None,
+    source_app: Optional[str] = None,
+    channel: Optional[str] = None,
     start_ts: Optional[datetime] = None,
     end_ts: Optional[datetime] = None,
 ) -> dict[str, int]:
@@ -133,6 +262,8 @@ async def count_logs(
         severity=severity,
         agent=agent,
         origin=origin,
+        source_app=source_app,
+        channel=channel,
         start_ts=start_ts,
         end_ts=end_ts,
     )
@@ -149,22 +280,7 @@ async def get_log(
     log = await repo.get_by_id(log_id)
     if not log:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Log not found")
-    context = build_normalized_log_context(log)
-    return LogResponse(
-        id=str(log["_id"]),
-        timestamp=log["timestamp"],
-        source=log["source"],
-        message=log["message"],
-        metadata=log.get("metadata", {}),
-        severity=log.get("severity"),
-        event_id=context["event_id"],
-        event_time=context["event_time"],
-        agent_name=context["agent_name"],
-        event_origin=context["event_origin"],
-        decoder_name=context["decoder_name"],
-        network=context["network"],
-        message_normalized=context["message_normalized"],
-    )
+    return _to_log_response(log)
 
 
 @router.post("/", response_model=LogResponse, status_code=status.HTTP_201_CREATED)
@@ -219,19 +335,4 @@ async def ingest_wazuh_log(
     created = await repo.get_by_id(log_id)
     if not created:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist Wazuh log")
-    context = build_normalized_log_context(created)
-    return LogResponse(
-        id=str(created["_id"]),
-        timestamp=created["timestamp"],
-        source=created["source"],
-        message=created["message"],
-        metadata=created.get("metadata", {}),
-        severity=created.get("severity"),
-        event_id=context["event_id"],
-        event_time=context["event_time"],
-        agent_name=context["agent_name"],
-        event_origin=context["event_origin"],
-        decoder_name=context["decoder_name"],
-        network=context["network"],
-        message_normalized=context["message_normalized"],
-    )
+    return _to_log_response(created)

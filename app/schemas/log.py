@@ -26,3 +26,7 @@ class LogResponse(BaseModel):
     decoder_name: Optional[str] = None
     network: Optional[Dict[str, Optional[str]]] = None
     message_normalized: Optional[str] = None
+    source_app: Optional[str] = None
+    source_ip: Optional[str] = None
+    destination_ip: Optional[str] = None
+    channel: Optional[str] = None

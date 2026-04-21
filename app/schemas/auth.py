@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr
 
@@ -54,6 +54,23 @@ class EmailVerifyResponse(BaseModel):
     verified: bool
 
 
+class NotificationPreferencesResponse(BaseModel):
+    email_enabled: bool
+    frequency: Literal["immediate", "daily"]
+    severities: list[Literal["high", "medium", "low"]]
+    timezone: str
+    cursor_at: datetime
+    last_digest_sent_at: Optional[datetime] = None
+    next_digest_at: Optional[datetime] = None
+
+
+class NotificationPreferencesUpdateRequest(BaseModel):
+    email_enabled: bool
+    frequency: Literal["immediate", "daily"]
+    severities: list[Literal["high", "medium", "low"]]
+    timezone: str
+
+
 class UserResponse(BaseModel):
     id: str
     email: EmailStr
@@ -62,3 +79,4 @@ class UserResponse(BaseModel):
     created_at: datetime
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    notification_prefs: NotificationPreferencesResponse

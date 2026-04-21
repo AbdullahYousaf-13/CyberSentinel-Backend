@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 import hashlib
 import secrets
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -18,6 +18,14 @@ from app.core.security import (
     verify_totp,
 )
 from app.db.repositories.user_repository import UserRepository
+from app.services.notification_preferences import (
+    VALID_FREQUENCIES,
+    compute_next_digest_at,
+    default_notification_prefs,
+    ensure_valid_timezone,
+    normalize_severities,
+    sanitize_stored_notification_prefs,
+)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -78,6 +86,7 @@ class AuthService:
             "first_name": first_name,
             "last_name": last_name,
             "created_at": datetime.utcnow(),
+            "notification_prefs": default_notification_prefs(datetime.utcnow()),
         }
         user_id = await self._users.create_user(user_payload)
         self._send_verification_email(email, verification_token)
@@ -87,6 +96,7 @@ class AuthService:
             "created_at": user_payload["created_at"],
             "first_name": first_name,
             "last_name": last_name,
+            "notification_prefs": user_payload["notification_prefs"],
         }
 
     async def authenticate(self, email: str, password: str, totp_code: Optional[str]) -> str:
@@ -195,7 +205,7 @@ class AuthService:
             },
         )
 
-    async def get_current_user(self, token: str) -> Dict[str, str]:
+    async def get_current_user(self, token: str) -> Dict[str, Any]:
         try:
             payload = validate_jwt(token, self._settings)
         except ValueError as exc:
@@ -206,6 +216,7 @@ class AuthService:
         user = await self._users.get_by_email(email)
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        prefs = sanitize_stored_notification_prefs(user.get("notification_prefs"), datetime.utcnow())
         return {
             "id": str(user["_id"]),
             "email": user["email"],
@@ -214,7 +225,59 @@ class AuthService:
             "created_at": user["created_at"],
             "first_name": user.get("first_name"),
             "last_name": user.get("last_name"),
+            "notification_prefs": prefs,
         }
+
+    async def update_notification_preferences(
+        self,
+        email: str,
+        email_enabled: bool,
+        frequency: str,
+        severities: list[str],
+        timezone_name: str,
+    ) -> Dict[str, Any]:
+        user = await self._users.get_by_email(email)
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        if email_enabled and user.get("email_verified") is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email notifications require a verified email address",
+            )
+
+        normalized_frequency = str(frequency).strip().lower()
+        if normalized_frequency not in VALID_FREQUENCIES:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid frequency")
+        try:
+            normalized_timezone = ensure_valid_timezone(timezone_name)
+            normalized_severities = normalize_severities(severities)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+        now_utc = datetime.utcnow()
+        existing = sanitize_stored_notification_prefs(user.get("notification_prefs"), now_utc)
+        if email_enabled and not normalized_severities:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="At least one severity must be selected when notifications are enabled",
+            )
+        effective_severities = normalized_severities or existing["severities"]
+
+        next_digest_at = None
+        if email_enabled and normalized_frequency == "daily":
+            next_digest_at = compute_next_digest_at(now_utc, normalized_timezone)
+
+        updated = {
+            "email_enabled": email_enabled,
+            "frequency": normalized_frequency,
+            "severities": effective_severities,
+            "timezone": normalized_timezone,
+            "cursor_at": now_utc,
+            "last_digest_sent_at": existing.get("last_digest_sent_at"),
+            "next_digest_at": next_digest_at,
+        }
+        await self._users.update_notification_preferences(str(user["_id"]), updated)
+        return updated
 
 
 def get_auth_service(settings: Settings = Depends(get_settings)) -> AuthService:
@@ -224,5 +287,5 @@ def get_auth_service(settings: Settings = Depends(get_settings)) -> AuthService:
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     auth_service: AuthService = Depends(get_auth_service),
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     return await auth_service.get_current_user(token)

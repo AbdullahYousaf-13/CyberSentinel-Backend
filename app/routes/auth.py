@@ -4,6 +4,8 @@ from app.schemas.auth import (
     EmailVerifyResponse,
     ForgotPasswordRequest,
     LoginRequest,
+    NotificationPreferencesResponse,
+    NotificationPreferencesUpdateRequest,
     RegisterRequest,
     ResetPasswordRequest,
     TOTPDisableRequest,
@@ -34,6 +36,7 @@ async def register_admin(payload: RegisterRequest, auth_service: AuthService = D
         created_at=user.get("created_at"),
         first_name=user.get("first_name"),
         last_name=user.get("last_name"),
+        notification_prefs=user["notification_prefs"],
     )
 
 
@@ -100,3 +103,19 @@ async def reset_password(
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: UserResponse = Depends(get_current_user)) -> UserResponse:
     return current_user
+
+
+@router.patch("/me/notification-preferences", response_model=NotificationPreferencesResponse)
+async def update_notification_preferences(
+    payload: NotificationPreferencesUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> NotificationPreferencesResponse:
+    updated = await auth_service.update_notification_preferences(
+        email=current_user["email"],
+        email_enabled=payload.email_enabled,
+        frequency=payload.frequency,
+        severities=payload.severities,
+        timezone_name=payload.timezone,
+    )
+    return NotificationPreferencesResponse(**updated)

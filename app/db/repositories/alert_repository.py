@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
@@ -40,3 +41,34 @@ class AlertRepository:
 
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(alert_id)})
+
+    async def list_alerts_for_digest(
+        self,
+        severities: List[str],
+        start_ts: datetime,
+        end_ts: datetime,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        query = {
+            "severity": {"$in": severities},
+            "created_at": {"$gt": start_ts, "$lte": end_ts},
+        }
+        cursor = self._collection.find(query).sort("created_at", 1).limit(limit)
+        return await cursor.to_list(length=limit)
+
+    async def list_alerts_for_analytics(self) -> List[Dict[str, Any]]:
+        cursor = self._collection.find(
+            {},
+            {
+                "_id": 0,
+                "created_at": 1,
+                "classification": 1,
+                "alert_type": 1,
+                "attack_type": 1,
+                "type": 1,
+            },
+        ).sort("created_at", 1)
+        results: List[Dict[str, Any]] = []
+        async for document in cursor:
+            results.append(document)
+        return results

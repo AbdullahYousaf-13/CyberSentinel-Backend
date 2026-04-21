@@ -225,3 +225,23 @@ def test_batch_infer_releases_guard_after_failure(monkeypatch: pytest.MonkeyPatc
     result = asyncio.run(ml_routes.batch_infer(payload, current_user={"id": "u"}))
     assert result == {"processed": 2, "alerts": 0}
     assert ml_routes._batch_infer_in_progress is False
+
+
+def test_map_cloud_prediction_benign_has_no_classification() -> None:
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+
+    result = service._map_cloud_prediction("BENIGN")
+
+    assert result == {"alert_type": "benign", "classification": None, "score": 0.0}
+
+
+def test_map_cloud_prediction_known_attack_without_suffix_has_no_classification() -> None:
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+
+    result = service._map_cloud_prediction("KNOWN_ATTACK_")
+
+    assert result["alert_type"] == "known_attack"
+    assert result["classification"] is None
+    assert result["score"] == 1.0

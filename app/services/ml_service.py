@@ -232,12 +232,12 @@ class MLService:
         if normalized == "UNKNOWN_ATTACK":
             return {
                 "alert_type": "anomaly",
-                "classification": None,
+                "classification": "UNKNOWN_ATTACK",
                 "score": self._settings.anomaly_score_threshold,
             }
         prefix = "KNOWN_ATTACK_"
         if normalized.startswith(prefix):
-            classification = prediction[len(prefix):] or None
+            classification = prediction[len(prefix):].strip() or None
             return {"alert_type": "known_attack", "classification": classification, "score": 1.0}
         logger.warning("Unexpected cloud prediction '%s'; treating as anomaly", prediction)
         return {

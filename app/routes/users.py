@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.db.repositories.user_repository import UserRepository
 from app.schemas.auth import UserResponse
 from app.services.auth_service import get_current_user
+from app.services.notification_preferences import sanitize_stored_notification_prefs
 
 router = APIRouter()
 
@@ -16,6 +17,7 @@ async def list_users(
     users = await repo.list_users(limit=limit)
     response = []
     for user in users:
+        prefs = sanitize_stored_notification_prefs(user.get("notification_prefs"), user.get("created_at"))
         response.append(
             UserResponse(
                 id=str(user["_id"]),
@@ -23,6 +25,7 @@ async def list_users(
                 is_2fa_enabled=user.get("is_2fa_enabled", False),
                 email_verified=user.get("email_verified", False),
                 created_at=user["created_at"],
+                notification_prefs=prefs,
             )
         )
     return response
@@ -37,10 +40,12 @@ async def get_user(
     user = await repo.get_by_id(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    prefs = sanitize_stored_notification_prefs(user.get("notification_prefs"), user.get("created_at"))
     return UserResponse(
         id=str(user["_id"]),
         email=user["email"],
         is_2fa_enabled=user.get("is_2fa_enabled", False),
         email_verified=user.get("email_verified", False),
         created_at=user["created_at"],
+        notification_prefs=prefs,
     )

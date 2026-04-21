@@ -9,6 +9,8 @@ def test_build_log_filters_includes_agent_and_origin_clauses() -> None:
         severity=None,
         agent="prod-web",
         origin="/var/log",
+        source_app=None,
+        channel=None,
         start_ts=None,
         end_ts=None,
     )
@@ -27,6 +29,8 @@ def test_build_log_filters_preserves_existing_time_and_source_filters() -> None:
         severity="high",
         agent=None,
         origin=None,
+        source_app=None,
+        channel=None,
         start_ts=start_ts,
         end_ts=end_ts,
     )
@@ -37,3 +41,38 @@ def test_build_log_filters_preserves_existing_time_and_source_filters() -> None:
     assert any("source" in clause for clause in clauses)
     assert any(clause.get("timestamp", {}).get("$gte") == start_ts for clause in clauses if "timestamp" in clause)
     assert any(clause.get("timestamp", {}).get("$lte") == end_ts for clause in clauses if "timestamp" in clause)
+
+
+def test_build_log_filters_supports_source_app_and_channel() -> None:
+    filters = _build_log_filters(
+        source=None,
+        severity=None,
+        agent=None,
+        origin=None,
+        source_app="Authentication",
+        channel="Network",
+        start_ts=None,
+        end_ts=None,
+    )
+
+    assert "$and" in filters
+    rendered = str(filters)
+    assert "metadata.location" in rendered
+    assert "metadata.raw_wazuh_payload.data.srcip" in rendered
+
+
+def test_build_log_filters_supports_general_channel() -> None:
+    filters = _build_log_filters(
+        source=None,
+        severity=None,
+        agent=None,
+        origin=None,
+        source_app=None,
+        channel="General",
+        start_ts=None,
+        end_ts=None,
+    )
+
+    rendered = str(filters)
+    assert "metadata.raw_wazuh_payload.data.srcip" in rendered
+    assert "sshd|syscheck|kernel" in rendered

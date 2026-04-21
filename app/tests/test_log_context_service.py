@@ -34,6 +34,10 @@ def test_context_extracts_archive_event_with_rule_and_network() -> None:
     assert context["event_origin"] == "/var/log/auth.log"
     assert context["decoder_name"] == "sshd"
     assert context["message_normalized"] == "SSH brute force attempt"
+    assert context["source_app"] == "Authentication"
+    assert context["source_ip"] == "203.0.113.10"
+    assert context["destination_ip"] == "10.0.0.5"
+    assert context["channel"] == "Network"
     assert context["network"] == {
         "srcip": "203.0.113.10",
         "dstip": "10.0.0.5",
@@ -62,6 +66,10 @@ def test_context_handles_archive_event_without_rule() -> None:
     assert context["event_origin"] == "/var/log/kern.log"
     assert context["decoder_name"] == "kernel"
     assert context["message_normalized"] == "kernel event fallback"
+    assert context["source_app"] == "System"
+    assert context["source_ip"] is None
+    assert context["destination_ip"] is None
+    assert context["channel"] == "System"
 
 
 def test_context_handles_event_without_network_fields() -> None:
@@ -79,6 +87,7 @@ def test_context_handles_event_without_network_fields() -> None:
     context = build_normalized_log_context(log)
     assert context["network"] is None
     assert context["decoder_name"] == "syscheck"
+    assert context["channel"] == "File"
 
 
 def test_context_handles_event_without_agent_name() -> None:
@@ -97,3 +106,5 @@ def test_context_handles_event_without_agent_name() -> None:
     context = build_normalized_log_context(log)
     assert context["agent_name"] is None
     assert context["event_origin"] == "wazuh-manager"
+    assert context["source_app"] == "General System"
+    assert context["channel"] == "General"

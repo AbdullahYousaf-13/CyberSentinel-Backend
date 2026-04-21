@@ -4,6 +4,12 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+AUTH_SOURCE_PATTERN = re.compile(r"(auth|sshd|login|secure)", re.IGNORECASE)
+SYSTEM_SOURCE_PATTERN = re.compile(r"(kern|kernel|syslog|system)", re.IGNORECASE)
+LOGIN_DECODER = "sshd"
+FILE_DECODER = "syscheck"
+SYSTEM_DECODER = "kernel"
+
 
 def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -98,6 +104,11 @@ def build_normalized_log_context(log_doc: Dict[str, Any]) -> Dict[str, Any]:
     event_time = _parse_event_time(payload.get("timestamp")) or _parse_event_time(log_doc.get("timestamp"))
     decoder_name = _as_str(decoder.get("name"))
     event_origin = _first_non_empty(payload.get("location"), decoder_name, log_doc.get("source"))
+    network = extract_network_context(payload)
+    source_app = classify_source_app(payload, log_doc)
+    source_ip = _as_str((network or {}).get("srcip"))
+    destination_ip = _as_str((network or {}).get("dstip"))
+    channel = classify_channel(network, decoder_name)
 
     return {
         "event_id": _as_str(payload.get("id")),
@@ -105,6 +116,40 @@ def build_normalized_log_context(log_doc: Dict[str, Any]) -> Dict[str, Any]:
         "agent_name": _as_str(agent.get("name")),
         "event_origin": event_origin,
         "decoder_name": decoder_name,
-        "network": extract_network_context(payload),
+        "network": network,
         "message_normalized": message_normalized,
+        "source_app": source_app,
+        "source_ip": source_ip,
+        "destination_ip": destination_ip,
+        "channel": channel,
     }
+
+
+def classify_source_app(payload: Dict[str, Any], log_doc: Dict[str, Any]) -> str:
+    source_parts = [
+        _as_str(payload.get("location")),
+        _as_str(log_doc.get("source")),
+    ]
+    source_text = " ".join(part for part in source_parts if part).lower()
+    if AUTH_SOURCE_PATTERN.search(source_text):
+        return "Authentication"
+    if SYSTEM_SOURCE_PATTERN.search(source_text):
+        return "System"
+    return "General System"
+
+
+def classify_channel(
+    network: Optional[Dict[str, Optional[str]]],
+    decoder_name: Optional[str],
+) -> str:
+    if network and (_as_str(network.get("srcip")) or _as_str(network.get("dstip"))):
+        return "Network"
+
+    normalized_decoder = str(decoder_name or "").strip().lower()
+    if normalized_decoder == LOGIN_DECODER:
+        return "Login"
+    if normalized_decoder == FILE_DECODER:
+        return "File"
+    if normalized_decoder == SYSTEM_DECODER:
+        return "System"
+    return "General"
