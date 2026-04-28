@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, List
 
 import numpy as np
@@ -89,7 +90,7 @@ class FeatureExtractor:
     ]
 
     KEY_ALIASES: Dict[str, List[str]] = {
-        "destinationport": ["dstport", "dport", "destination_port", "destport"],
+        "destinationport": ["dstport", "dport", "destination_port", "destport", "port"],
         "flowduration": ["duration", "flow_duration"],
         "totalfwdpackets": ["fwdpacketcount", "total_forward_packets"],
         "totalbackwardpackets": ["bwdpacketcount", "total_backward_packets"],
@@ -125,15 +126,180 @@ class FeatureExtractor:
     def _build_lookup(self, log: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
         combined: Dict[str, Any] = {}
         combined.update(metadata)
+        self._merge_raw_wazuh_payload(combined, metadata)
         for key, value in log.items():
             if key in {"metadata", "message"}:
                 continue
             combined[key] = value
+        self._derive_http_proxy_features(combined, log)
 
         normalized: Dict[str, Any] = {}
         for key, value in combined.items():
-            normalized[self._normalize_key(key)] = value
+            for variant in self._key_variants(str(key)):
+                normalized.setdefault(variant, value)
         return normalized
+
+    @staticmethod
+    def _key_variants(key: str) -> List[str]:
+        variants = {FeatureExtractor._normalize_key(key)}
+        parts = [part for part in re.split(r"[_\.\-]+", key) if part]
+        if len(parts) > 1:
+            for idx in range(1, len(parts)):
+                variants.add(FeatureExtractor._normalize_key("_".join(parts[idx:])))
+            variants.add(FeatureExtractor._normalize_key(parts[-1]))
+        return [item for item in variants if item]
+
+    @staticmethod
+    def _merge_raw_wazuh_payload(combined: Dict[str, Any], metadata: Dict[str, Any]) -> None:
+        payload = metadata.get("raw_wazuh_payload")
+        if not isinstance(payload, dict):
+            return
+
+        for key in ("full_log", "location", "timestamp"):
+            if key in payload:
+                combined.setdefault(key, payload[key])
+
+        for nested_key in ("data", "rule", "agent", "decoder"):
+            nested = payload.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            for key, value in nested.items():
+                combined.setdefault(key, value)
+                combined.setdefault(f"{nested_key}_{key}", value)
+
+    def _derive_http_proxy_features(self, combined: Dict[str, Any], log: Dict[str, Any]) -> None:
+        full_log = combined.get("full_log")
+        if not isinstance(full_log, str):
+            full_log = log.get("message")
+        if not isinstance(full_log, str):
+            return
+
+        parsed = self._parse_nginx_access_log(full_log)
+        if parsed is None:
+            return
+
+        request_line = parsed["request_line"]
+        method = parsed["method"]
+        path = parsed["path"]
+        status = parsed["status"]
+        body_bytes = parsed["body_bytes"]
+        user_agent = parsed["user_agent"]
+
+        request_len = len(request_line)
+        path_len = len(path)
+        ua_len = len(user_agent)
+        suspicious_path = 1.0 if self._has_suspicious_http_pattern(path) else 0.0
+
+        combined.setdefault("total_fwd_packets", 1.0)
+        combined.setdefault("total_backward_packets", 1.0)
+        combined.setdefault("total_length_of_fwd_packets", float(request_len))
+        combined.setdefault("total_length_of_bwd_packets", float(body_bytes))
+        combined.setdefault("fwd_packet_length_max", float(request_len))
+        combined.setdefault("fwd_packet_length_min", float(request_len))
+        combined.setdefault("fwd_packet_length_mean", float(request_len))
+        combined.setdefault("bwd_packet_length_max", float(body_bytes))
+        combined.setdefault("bwd_packet_length_min", float(body_bytes))
+        combined.setdefault("bwd_packet_length_mean", float(body_bytes))
+        combined.setdefault("min_packet_length", float(min(request_len, body_bytes)))
+        combined.setdefault("max_packet_length", float(max(request_len, body_bytes)))
+        combined.setdefault("packet_length_mean", float((request_len + body_bytes) / 2.0))
+        combined.setdefault("packet_length_variance", float(abs(request_len - body_bytes)))
+        combined.setdefault("average_packet_size", float((request_len + body_bytes) / 2.0))
+        combined.setdefault("subflow_fwd_packets", 1.0)
+        combined.setdefault("subflow_bwd_packets", 1.0)
+        combined.setdefault("subflow_fwd_bytes", float(request_len))
+        combined.setdefault("subflow_bwd_bytes", float(body_bytes))
+        combined.setdefault("flow_duration", float(max(path_len + ua_len, 1)))
+        combined.setdefault("flow_bytes_sec", float(request_len + body_bytes))
+        combined.setdefault("flow_packets_sec", 2.0)
+        combined.setdefault("fwd_packets_sec", 1.0)
+        combined.setdefault("bwd_packets_sec", 1.0)
+        combined.setdefault("flow_iat_mean", float(max(path_len, 1)))
+        combined.setdefault("flow_iat_std", float(path_len / 2.0))
+        combined.setdefault("flow_iat_max", float(max(path_len, ua_len, 1)))
+        combined.setdefault("flow_iat_min", 1.0)
+        combined.setdefault("fwd_iat_total", float(max(path_len, 1)))
+        combined.setdefault("fwd_iat_mean", float(max(path_len, 1)))
+        combined.setdefault("fwd_iat_std", float(path_len / 3.0))
+        combined.setdefault("fwd_iat_max", float(max(path_len, 1)))
+        combined.setdefault("fwd_iat_min", 1.0)
+        combined.setdefault("bwd_iat_total", float(max(ua_len, 1)))
+        combined.setdefault("bwd_iat_mean", float(max(ua_len, 1)))
+        combined.setdefault("bwd_iat_std", float(ua_len / 3.0))
+        combined.setdefault("bwd_iat_max", float(max(ua_len, 1)))
+        combined.setdefault("bwd_iat_min", 1.0)
+        combined.setdefault("init_win_bytes_forward", float(min(request_len, 65535)))
+        combined.setdefault("init_win_bytes_backward", float(min(body_bytes, 65535)))
+        combined.setdefault("act_data_pkt_fwd", 1.0)
+        combined.setdefault("min_seg_size_forward", float(max(min(request_len, 1500), 1)))
+        combined.setdefault("active_mean", float(max(path_len, 1)))
+        combined.setdefault("active_std", float(path_len / 2.0))
+        combined.setdefault("active_max", float(max(path_len, ua_len, 1)))
+        combined.setdefault("active_min", 1.0)
+        combined.setdefault("idle_mean", float(max(ua_len, 1)))
+        combined.setdefault("idle_std", float(ua_len / 2.0))
+        combined.setdefault("idle_max", float(max(ua_len, 1)))
+        combined.setdefault("idle_min", 1.0)
+        combined.setdefault("ack_flag_count", 1.0 if status >= 200 else 0.0)
+        combined.setdefault("syn_flag_count", 1.0 if method == "GET" else 0.0)
+        combined.setdefault("psh_flag_count", suspicious_path)
+        combined.setdefault("rst_flag_count", 1.0 if status >= 400 else 0.0)
+        combined.setdefault("urg_flag_count", 1.0 if method == "POST" else 0.0)
+        combined.setdefault("ece_flag_count", suspicious_path)
+        combined.setdefault("fwd_psh_flags", suspicious_path)
+        combined.setdefault("bwd_psh_flags", suspicious_path)
+        combined.setdefault("down_up_ratio", float(body_bytes / max(request_len, 1)))
+
+    @staticmethod
+    def _parse_nginx_access_log(line: str) -> Dict[str, Any] | None:
+        line = line.strip()
+        # Format: ip - - [time] "METHOD /path HTTP/1.1" status bytes "ref" "ua"
+        pattern = re.compile(
+            r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[[^\]]+\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d{3})\s+(?P<bytes>\S+)\s+"[^"]*"\s+"(?P<ua>[^"]*)"'
+        )
+        match = pattern.match(line)
+        if not match:
+            return None
+
+        request_line = match.group("request").strip()
+        request_parts = request_line.split()
+        method = request_parts[0].upper() if request_parts else ""
+        path = request_parts[1] if len(request_parts) > 1 else ""
+        try:
+            status = int(match.group("status"))
+        except ValueError:
+            status = 0
+        byte_token = match.group("bytes")
+        try:
+            body_bytes = int(byte_token)
+        except ValueError:
+            body_bytes = 0
+        return {
+            "request_line": request_line,
+            "method": method,
+            "path": path,
+            "status": status,
+            "body_bytes": body_bytes,
+            "user_agent": match.group("ua"),
+        }
+
+    @staticmethod
+    def _has_suspicious_http_pattern(path: str) -> bool:
+        lowered = path.lower()
+        indicators = (
+            "..",
+            "%2e%2e",
+            "wp-config",
+            "localsettings",
+            ".htaccess",
+            "config.php",
+            ".bak",
+            ".old",
+            ".swp",
+            "copy%20of",
+            "%23",
+        )
+        return any(token in lowered for token in indicators)
 
     def _extract_feature_value(self, feature_name: str, lookup: Dict[str, Any]) -> float:
         primary = self._normalize_key(feature_name)
