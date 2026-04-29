@@ -4,9 +4,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.agent import InvestigationPlanResponse
-from app.schemas.alert import AlertAnalyticsResponse, AlertResponse
+from app.schemas.alert import (
+    AlertAnalyticsResponse,
+    AlertResponse,
+    ConfirmKnownAttackRequest,
+    ConfirmKnownAttackResponse,
+    MarkFalsePositiveRequest,
+    MarkFalsePositiveResponse,
+)
 from app.services.alert_service import AlertService
-from app.services.auth_service import get_current_user
+from app.services.auth_service import get_current_admin_user, get_current_user
 from app.services.investigation_agent_service import InvestigationAgentService
 from app.core.config import get_settings
 
@@ -16,7 +23,10 @@ router = APIRouter()
 def _response_classification(alert: dict) -> Optional[str]:
     raw = alert.get("classification")
     if isinstance(raw, str) and raw.strip():
-        return raw.strip()
+        value = raw.strip()
+        if value.upper() == "UNKNOWN_ATTACK":
+            return None
+        return value
     return None
 
 
@@ -113,3 +123,40 @@ async def get_investigation_plan(
     }
     plan = await agent_service.request_plan(payload)
     return InvestigationPlanResponse(**plan)
+
+
+@router.post("/{alert_id}/confirm-known", response_model=ConfirmKnownAttackResponse)
+async def confirm_known_attack(
+    alert_id: str,
+    payload: ConfirmKnownAttackRequest,
+    current_user: dict = Depends(get_current_admin_user),
+) -> ConfirmKnownAttackResponse:
+    service = AlertService()
+    try:
+        result = await service.confirm_known_attack(
+            alert_id=alert_id,
+            classification=payload.classification,
+            confirmed_by=current_user["email"],
+            notes=payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ConfirmKnownAttackResponse(**result)
+
+
+@router.post("/{alert_id}/mark-false-positive", response_model=MarkFalsePositiveResponse)
+async def mark_false_positive(
+    alert_id: str,
+    payload: MarkFalsePositiveRequest,
+    current_user: dict = Depends(get_current_admin_user),
+) -> MarkFalsePositiveResponse:
+    service = AlertService()
+    try:
+        result = await service.mark_false_positive(
+            alert_id=alert_id,
+            reviewed_by=current_user["email"],
+            notes=payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return MarkFalsePositiveResponse(**result)

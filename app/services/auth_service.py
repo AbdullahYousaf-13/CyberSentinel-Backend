@@ -216,10 +216,14 @@ class AuthService:
         user = await self._users.get_by_email(email)
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        admin_rows = await self._users.list_users(limit=1)
+        admin_email = str(admin_rows[0].get("email") or "").strip().lower() if admin_rows else ""
+        is_admin = str(user.get("email") or "").strip().lower() == admin_email if admin_email else False
         prefs = sanitize_stored_notification_prefs(user.get("notification_prefs"), datetime.utcnow())
         return {
             "id": str(user["_id"]),
             "email": user["email"],
+            "is_admin": is_admin,
             "is_2fa_enabled": user["is_2fa_enabled"],
             "email_verified": user.get("email_verified", True),
             "created_at": user["created_at"],
@@ -289,3 +293,21 @@ async def get_current_user(
     auth_service: AuthService = Depends(get_auth_service),
 ) -> Dict[str, Any]:
     return await auth_service.get_current_user(token)
+
+
+async def get_current_admin_user(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    This project currently uses a single-admin bootstrap model.
+    The earliest created account is treated as the admin account.
+    """
+    repo = UserRepository()
+    users = await repo.list_users(limit=1)
+    if not users:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin account not found")
+    admin_email = str(users[0].get("email") or "").strip().lower()
+    current_email = str(current_user.get("email") or "").strip().lower()
+    if not admin_email or current_email != admin_email:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
+    return current_user

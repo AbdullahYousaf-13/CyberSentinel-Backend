@@ -38,15 +38,19 @@ CyberSentinel is a classical ML based security monitoring backend with a sandbox
 - `POST /api/auth/login` authenticate with optional TOTP code.
 - `POST /api/logs/` ingest a log via REST.
 - `POST /api/ml/batch-infer` run batch ML inference.
-- `POST /api/ml/retrain` returns `501` in cloud-only mode.
-- `POST /api/ml/rollback` returns `501` in cloud-only mode.
+- `POST /api/ml/models/retrain` queue a retrain job (admin only).
+- `GET /api/ml/models/retrain-jobs` list retrain jobs (admin only).
+- `GET /api/ml/models/versions` list model versions (admin only).
+- `POST /api/ml/models/rollback` activate a previous model version (admin only).
 - `GET /api/alerts/` list alerts.
+- `POST /api/alerts/{id}/confirm-known` confirm anomaly as known-attack label (admin only).
 - `POST /api/alerts/{id}/investigation-plan` call the external agent service.
 - `GET /api/ws/alerts` WebSocket for alert notifications.
 
 ## Notes
 - Backend startup requires `MODEL_API_URL` and verifies the cloud-model API is reachable.
+- Model ops endpoints require `MODEL_ADMIN_TOKEN` configured in backend and cloud-model env.
 - Place model `.pkl` files in `CyberSentinel-Cloud-Model/models/` on each developer machine.
-- Retraining and rollback are disabled in this backend (cloud-only mode).
+- One-time terminology migration script: `python scripts/migrate_unknown_attack_to_anomaly.py`.
 
 For full setup instructions, see `SETUP.md`.

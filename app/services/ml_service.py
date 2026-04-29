@@ -10,6 +10,8 @@ from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
 from app.ml.features.feature_extractor import FeatureExtractor
 from app.services.alert_service import AlertService
+from app.services.ml_promotion_service import MLPromotionService
+from app.services.ml_suppression_service import MLSuppressionService
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 class MLService:
     _feature_extractor = FeatureExtractor()
     _model_version: str = "cloud-api"
+    _supported_decoder_scope = {"web-accesslog"}
 
     @classmethod
     async def initialize(cls, settings: Settings) -> None:
@@ -31,6 +34,8 @@ class MLService:
         self._settings = settings
         self._logs = LogRepository()
         self._alerts = AlertService()
+        self._promotions = MLPromotionService()
+        self._suppressions = MLSuppressionService()
 
     async def run_batch_inference(self, batch_size: int) -> Dict[str, int]:
         logs = await self._logs.fetch_batch(batch_size)
@@ -42,6 +47,18 @@ class MLService:
         for log in logs:
             processed_count += 1
             log_id = log["_id"]
+            suppression = await self._suppressions.resolve_suppression(log)
+            if suppression:
+                await self._logs.mark_ml_skipped(
+                    log_id,
+                    "suppressed_false_positive",
+                    self._model_version,
+                )
+                continue
+            skip_reason = self.get_skip_reason(log)
+            if skip_reason:
+                await self._logs.mark_ml_skipped(log_id, skip_reason, self._model_version)
+                continue
             try:
                 result, model_version = await self.infer_single_log(log)
             except Exception as exc:  # noqa: BLE001
@@ -73,12 +90,27 @@ class MLService:
     async def infer_logs(self, logs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
         features = self._feature_extractor.transform(logs)
         model_api_url = self.get_required_model_api_url(self._settings)
-        return (
-            await self._predict_with_cloud_model(model_api_url, features),
-            self._model_version,
-        )
+        results, model_version = await self._predict_with_cloud_model(model_api_url, features)
+        promoted: List[Dict[str, Any]] = []
+        for idx, result in enumerate(results):
+            promoted.append(await self._apply_manual_promotion(logs[idx], result))
+        return (promoted, model_version)
 
     async def infer_single_log(self, log: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+        suppression = await self._suppressions.resolve_suppression(log)
+        if suppression:
+            return (
+                {
+                    "alert_type": "benign",
+                    "classification": None,
+                    "score": 0.0,
+                    "rf_label": "0",
+                    "if_used": False,
+                    "raw_prediction": "SUPPRESSED_FALSE_POSITIVE",
+                    "suppression_fingerprint": suppression.get("fingerprint"),
+                },
+                self._model_version,
+            )
         results, model_version = await self.infer_logs([log])
         if not results:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Inference result is empty")
@@ -128,30 +160,38 @@ class MLService:
             f"Base URL: {model_api_url}. Checks: {'; '.join(errors)}"
         )
 
-    async def _predict_with_cloud_model(self, model_api_url: str, features) -> List[Dict[str, Any]]:
+    async def _predict_with_cloud_model(self, model_api_url: str, features) -> Tuple[List[Dict[str, Any]], str]:
         predict_url = f"{model_api_url.rstrip('/')}/predict"
         timeout = max(1, self._settings.model_api_timeout_seconds)
         results: List[Dict[str, Any]] = []
+        resolved_model_version = self._model_version
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             for feature_row in features:
                 payload = feature_row.tolist()
                 try:
-                    prediction = await self._request_cloud_prediction(client, predict_url, payload)
+                    prediction_payload = await self._request_cloud_prediction(client, predict_url, payload)
                 except httpx.HTTPError as exc:
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail=f"Cloud model API request failed: {exc}",
                     ) from exc
-                results.append(self._map_cloud_prediction(prediction))
-        return results
+                prediction = prediction_payload["prediction"]
+                model_version = prediction_payload.get("model_version")
+                if model_version:
+                    resolved_model_version = model_version
+                mapped = self._map_cloud_prediction(prediction)
+                if model_version:
+                    mapped["model_version"] = model_version
+                results.append(mapped)
+        return results, resolved_model_version
 
     async def _request_cloud_prediction(
         self,
         client: httpx.AsyncClient,
         predict_url: str,
         payload: List[float],
-    ) -> str:
+    ) -> Dict[str, Any]:
         attempts = [
             ("json-list", {"json": payload}),
             ("json-object-sample", {"json": {"sample": payload}}),
@@ -193,55 +233,114 @@ class MLService:
                 logger.debug("Cloud prediction attempt %s returned non-JSON body", name)
                 continue
 
-            prediction = self._extract_prediction_value(body)
-            if prediction:
-                return prediction
+            prediction_payload = self._extract_prediction_payload(body)
+            if prediction_payload.get("prediction"):
+                return prediction_payload
 
         if last_http_error:
             raise last_http_error
         raise httpx.HTTPError("Cloud model API returned no usable prediction")
 
     @staticmethod
-    def _extract_prediction_value(body: Any) -> str:
+    def _extract_prediction_payload(body: Any) -> Dict[str, Any]:
+        prediction = ""
+        model_version = None
         if isinstance(body, dict):
+            raw_version = body.get("model_version", body.get("version"))
+            if isinstance(raw_version, str) and raw_version.strip():
+                model_version = raw_version.strip()
             for key in ("prediction", "result", "label", "class"):
                 value = body.get(key)
                 if isinstance(value, str) and value.strip():
-                    return value.strip()
-                if isinstance(value, (int, float)):
-                    return str(value)
+                    prediction = value.strip()
+                    break
+                if isinstance(value, (int, float)) and prediction == "":
+                    prediction = str(value)
+                    break
                 if isinstance(value, list) and value:
                     first = value[0]
                     if isinstance(first, str):
-                        return first.strip()
-                    if isinstance(first, (int, float)):
-                        return str(first)
-            return ""
-        if isinstance(body, list) and body:
+                        prediction = first.strip()
+                        break
+                    if isinstance(first, (int, float)) and prediction == "":
+                        prediction = str(first)
+                        break
+        elif isinstance(body, list) and body:
             first = body[0]
             if isinstance(first, str):
-                return first.strip()
-            if isinstance(first, (int, float)):
-                return str(first)
-        return ""
+                prediction = first.strip()
+            elif isinstance(first, (int, float)):
+                prediction = str(first)
+        return {"prediction": prediction, "model_version": model_version}
 
     def _map_cloud_prediction(self, prediction: str) -> Dict[str, Any]:
-        normalized = prediction.upper()
+        raw_prediction = str(prediction or "").strip()
+        normalized = raw_prediction.upper()
         if normalized == "BENIGN":
-            return {"alert_type": "benign", "classification": None, "score": 0.0}
-        if normalized == "UNKNOWN_ATTACK":
+            return {
+                "alert_type": "benign",
+                "classification": None,
+                "score": 0.0,
+                "rf_label": "0",
+                "if_used": True,
+                "raw_prediction": raw_prediction,
+            }
+        if normalized in {"UNKNOWN_ATTACK", "ANOMALY"}:
             return {
                 "alert_type": "anomaly",
-                "classification": "UNKNOWN_ATTACK",
+                "classification": None,
                 "score": self._settings.anomaly_score_threshold,
+                "rf_label": "0",
+                "if_used": True,
+                "raw_prediction": "ANOMALY",
             }
         prefix = "KNOWN_ATTACK_"
         if normalized.startswith(prefix):
-            classification = prediction[len(prefix):].strip() or None
-            return {"alert_type": "known_attack", "classification": classification, "score": 1.0}
+            classification = raw_prediction[len(prefix):].strip() or None
+            rf_label = classification or raw_prediction[len(prefix):].strip() or "1"
+            return {
+                "alert_type": "known_attack",
+                "classification": classification,
+                "score": 1.0,
+                "rf_label": rf_label,
+                "if_used": False,
+                "raw_prediction": raw_prediction,
+            }
         logger.warning("Unexpected cloud prediction '%s'; treating as anomaly", prediction)
         return {
             "alert_type": "anomaly",
-            "classification": prediction or None,
+            "classification": None,
             "score": self._settings.anomaly_score_threshold,
+            "rf_label": "0",
+            "if_used": True,
+            "raw_prediction": raw_prediction,
         }
+
+    def get_skip_reason(self, log: Dict[str, Any]) -> str | None:
+        metadata = log.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            return None
+        raw = metadata.get("raw_wazuh_payload")
+        if not isinstance(raw, dict):
+            return None
+        decoder = raw.get("decoder")
+        decoder_name = ""
+        if isinstance(decoder, dict):
+            decoder_name = str(decoder.get("name") or "").strip().lower()
+        if decoder_name in self._supported_decoder_scope:
+            return None
+        return "decoder_not_supported_v1"
+
+    async def _apply_manual_promotion(self, log: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        if result.get("alert_type") != "anomaly":
+            return result
+        match = await self._promotions.resolve_manual_promotion(log)
+        if not match:
+            return result
+        promoted = dict(result)
+        promoted["alert_type"] = "known_attack"
+        promoted["classification"] = match.get("classification")
+        promoted["score"] = 1.0
+        promoted["promotion_source"] = "manual_fingerprint"
+        promoted["fingerprint"] = match.get("fingerprint")
+        return promoted

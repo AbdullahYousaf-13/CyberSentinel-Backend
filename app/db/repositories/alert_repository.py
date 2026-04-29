@@ -42,6 +42,12 @@ class AlertRepository:
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(alert_id)})
 
+    async def update_alert_fields(self, alert_id: str, updates: Dict[str, Any]) -> None:
+        await self._collection.update_one({"_id": ObjectId(alert_id)}, {"$set": updates})
+
+    async def get_alert_by_log_id(self, log_id: str) -> Optional[Dict[str, Any]]:
+        return await self._collection.find_one({"log_id": log_id})
+
     async def list_alerts_for_digest(
         self,
         severities: List[str],

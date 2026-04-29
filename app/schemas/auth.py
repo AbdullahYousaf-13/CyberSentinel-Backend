@@ -74,6 +74,7 @@ class NotificationPreferencesUpdateRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: EmailStr
+    is_admin: bool = False
     is_2fa_enabled: bool
     email_verified: bool = False
     created_at: datetime

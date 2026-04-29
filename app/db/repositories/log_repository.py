@@ -59,6 +59,9 @@ class LogRepository:
     async def get_by_id(self, log_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(log_id)})
 
+    async def update_fields_by_id(self, log_id: str, updates: Dict[str, Any]) -> None:
+        await self._collection.update_one({"_id": ObjectId(log_id)}, {"$set": updates})
+
     async def mark_ml_done(self, log_id: ObjectId, result: Dict[str, Any], model_version: str) -> None:
         await self._collection.update_one(
             {"_id": log_id},
@@ -84,3 +87,44 @@ class LogRepository:
                 },
             },
         )
+
+    async def mark_ml_skipped(self, log_id: ObjectId, reason: str, model_version: str) -> None:
+        await self._collection.update_one(
+            {"_id": log_id},
+            {
+                "$set": {
+                    "ml_status": "skipped",
+                    "ml_processed_at": datetime.utcnow(),
+                    "ml_skip_reason": reason[:200],
+                    "ml_model_version": model_version,
+                    "ml_result": {
+                        "alert_type": "benign",
+                        "classification": None,
+                        "score": 0.0,
+                        "skip_reason": reason[:200],
+                    },
+                },
+                "$unset": {"ml_error": ""},
+            },
+        )
+
+    async def list_logs_by_ids(self, log_ids: List[str]) -> List[Dict[str, Any]]:
+        object_ids = []
+        for log_id in log_ids:
+            try:
+                object_ids.append(ObjectId(log_id))
+            except Exception:  # noqa: BLE001
+                continue
+        if not object_ids:
+            return []
+        cursor = self._collection.find({"_id": {"$in": object_ids}})
+        return await cursor.to_list(length=len(object_ids))
+
+    async def list_web_benign_logs(self, limit: int) -> List[Dict[str, Any]]:
+        query = {
+            "ml_result.alert_type": "benign",
+            "metadata.raw_wazuh_payload.decoder.name": "web-accesslog",
+            "metadata.engineered_features_78": {"$exists": True},
+        }
+        cursor = self._collection.find(query).sort("timestamp", -1).limit(limit)
+        return await cursor.to_list(length=limit)

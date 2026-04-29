@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     anomaly_score_threshold: float = Field(0.65, env="ANOMALY_SCORE_THRESHOLD")
     model_api_url: Optional[str] = Field(None, env="MODEL_API_URL")
     model_api_timeout_seconds: int = Field(10, env="MODEL_API_TIMEOUT_SECONDS")
+    model_admin_token: Optional[str] = Field(None, env="MODEL_ADMIN_TOKEN")
 
     agent_service_url: Optional[str] = Field(None, env="AGENT_SERVICE_URL")
     agent_timeout_seconds: int = Field(10, env="AGENT_TIMEOUT_SECONDS")

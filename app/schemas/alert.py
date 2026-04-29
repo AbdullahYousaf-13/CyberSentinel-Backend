@@ -41,3 +41,23 @@ class AlertAnalyticsResponse(BaseModel):
     total_alerts: int
     first_alert_at: Optional[datetime] = None
     last_alert_at: Optional[datetime] = None
+
+
+class ConfirmKnownAttackRequest(BaseModel):
+    classification: str
+    notes: Optional[str] = None
+
+
+class ConfirmKnownAttackResponse(BaseModel):
+    alert_id: str
+    fingerprint: str
+    classification: str
+
+
+class MarkFalsePositiveRequest(BaseModel):
+    notes: Optional[str] = None
+
+
+class MarkFalsePositiveResponse(BaseModel):
+    alert_id: str
+    fingerprint: str

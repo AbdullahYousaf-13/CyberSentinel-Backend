@@ -1,14 +1,15 @@
 import asyncio
 import socket
 import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
-from app.routes.ml import rollback_models, retrain_models
-from app.schemas.ml import RollbackRequest, TrainingDataRequest
+from app.routes import ml as ml_routes
+from app.schemas.ml import ModelVersionActivateRequest, RetrainJobCreateRequest
 from app.services.ml_service import MLService
 
 
@@ -68,15 +69,112 @@ def test_validate_cloud_model_reachable_failure() -> None:
         asyncio.run(MLService.validate_cloud_model_reachable(f"http://127.0.0.1:{port}", 1))
 
 
-def test_retrain_endpoint_disabled_in_cloud_only_mode() -> None:
-    payload = TrainingDataRequest(reason="x", features=[[0.0]], labels=[0])
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(retrain_models(payload, current_user={"id": "test"}))
-    assert exc.value.status_code == 501
+def test_create_retrain_job_uses_model_ops_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeOps:
+        def __init__(self, _settings) -> None:
+            return
+
+        async def create_retrain_job(self, reason: str, requested_by: str) -> str:
+            assert reason == "manual"
+            assert requested_by == "admin@test"
+            return "job-1"
+
+        async def get_retrain_job(self, _job_id: str):
+            return {
+                "id": "job-1",
+                "status": "queued",
+                "reason": "manual",
+                "requested_by": "admin@test",
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+                "started_at": None,
+                "finished_at": None,
+                "metrics": {},
+                "result": {},
+                "error": None,
+            }
+
+    monkeypatch.setattr(ml_routes, "MLModelOpsService", _FakeOps)
+    monkeypatch.setattr(ml_routes, "get_settings", lambda: object())
+    payload = RetrainJobCreateRequest(reason="manual")
+    result = asyncio.run(ml_routes.create_retrain_job(payload, current_user={"email": "admin@test"}))
+    assert result.id == "job-1"
 
 
-def test_rollback_endpoint_disabled_in_cloud_only_mode() -> None:
-    payload = RollbackRequest(target_version="v1")
+def test_rollback_model_calls_model_ops_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeOps:
+        def __init__(self, _settings) -> None:
+            return
+
+        async def rollback(self, target_version: str):
+            return {"status": "ok", "active_version": target_version}
+
+    monkeypatch.setattr(ml_routes, "MLModelOpsService", _FakeOps)
+    monkeypatch.setattr(ml_routes, "get_settings", lambda: object())
+    payload = ModelVersionActivateRequest(target_version="v1")
+    result = asyncio.run(ml_routes.rollback_model(payload, current_user={"email": "admin@test"}))
+    assert result["active_version"] == "v1"
+
+
+def test_list_model_versions_translates_service_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FailOps:
+        def __init__(self, _settings) -> None:
+            return
+
+        async def list_versions(self):
+            raise RuntimeError("MODEL_ADMIN_TOKEN is required for model ops")
+
+    monkeypatch.setattr(ml_routes, "MLModelOpsService", _FailOps)
+    monkeypatch.setattr(ml_routes, "get_settings", lambda: object())
+
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(rollback_models(payload, current_user={"id": "test"}))
-    assert exc.value.status_code == 501
+        asyncio.run(ml_routes.list_model_versions(current_user={"email": "admin@test"}))
+
+    assert exc.value.status_code == 400
+    assert "MODEL_ADMIN_TOKEN" in exc.value.detail
+
+
+def test_list_suppressions_calls_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeSuppressions:
+        async def list_suppressions(self, limit: int = 200):
+            assert limit == 10
+            now = datetime.utcnow()
+            return [
+                {
+                    "fingerprint": "f" * 64,
+                    "active": True,
+                    "reason": "false_positive",
+                    "created_by": "admin@test",
+                    "created_at": now,
+                    "updated_at": now,
+                    "notes": "noise",
+                }
+            ]
+
+    monkeypatch.setattr(ml_routes, "MLSuppressionService", _FakeSuppressions)
+    result = asyncio.run(ml_routes.list_suppressions(current_user={"email": "admin@test"}, limit=10))
+    assert len(result) == 1
+    assert result[0].fingerprint == "f" * 64
+    assert result[0].active is True
+
+
+def test_deactivate_suppression_calls_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeSuppressions:
+        async def deactivate(self, fingerprint: str):
+            assert fingerprint == "abc"
+
+    monkeypatch.setattr(ml_routes, "MLSuppressionService", _FakeSuppressions)
+    result = asyncio.run(ml_routes.deactivate_suppression("abc", current_user={"email": "admin@test"}))
+    assert result.fingerprint == "abc"
+    assert result.active is False
+
+
+def test_activate_suppression_calls_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeSuppressions:
+        async def activate(self, fingerprint: str):
+            assert fingerprint == "abc"
+
+    monkeypatch.setattr(ml_routes, "MLSuppressionService", _FakeSuppressions)
+    result = asyncio.run(ml_routes.activate_suppression("abc", current_user={"email": "admin@test"}))
+    assert result.fingerprint == "abc"
+    assert result.active is True

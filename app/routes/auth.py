@@ -31,6 +31,7 @@ async def register_admin(payload: RegisterRequest, auth_service: AuthService = D
     return UserResponse(
         id=user["id"],
         email=user["email"],
+        is_admin=True,
         is_2fa_enabled=False,
         email_verified=False,
         created_at=user.get("created_at"),

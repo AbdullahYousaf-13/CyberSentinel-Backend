@@ -135,6 +135,12 @@ class RawWazuhPipelineService:
             await self._raw_repo.mark_done(ingest_key, log_id)
             return
 
+        skip_reason = self._ml.get_skip_reason(stored)
+        if skip_reason:
+            await self._logs.mark_ml_skipped(log_id_obj, skip_reason, self._ml._model_version)
+            await self._raw_repo.mark_done(ingest_key, log_id)
+            return
+
         try:
             result, model_version = await self._ml.infer_single_log(stored)
             await self._logs.mark_ml_done(log_id_obj, result, model_version)

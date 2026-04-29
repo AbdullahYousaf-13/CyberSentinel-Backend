@@ -3,12 +3,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from app.core.config import get_settings
+from app.db.repositories.log_repository import LogRepository
 from app.core.websocket import manager
 from app.db.repositories.alert_repository import AlertRepository
+from app.services.ml_promotion_service import MLPromotionService
+from app.services.ml_suppression_service import MLSuppressionService
 from app.services.notification_service import NotificationService
 
 ANALYTICS_TARGET_BUCKETS = 12
-_PLACEHOLDER_LABELS = {"n/a", "na", "none", "null", "undefined"}
+_PLACEHOLDER_LABELS = {"n/a", "na", "none", "null", "undefined", "unknown_attack"}
 _NUMERIC_ONLY_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
 
 
@@ -137,6 +140,9 @@ def _merge_trend_points(points: list[Dict[str, Any]], target: int) -> list[Dict[
 class AlertService:
     def __init__(self) -> None:
         self._alerts = AlertRepository()
+        self._logs = LogRepository()
+        self._promotions = MLPromotionService()
+        self._suppressions = MLSuppressionService()
         self._notifications = NotificationService(get_settings())
 
     async def create_alert(
@@ -205,6 +211,140 @@ class AlertService:
 
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
         return await self._alerts.get_alert(alert_id)
+
+    async def confirm_known_attack(
+        self,
+        alert_id: str,
+        classification: str,
+        confirmed_by: str,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        alert = await self._alerts.get_alert(alert_id)
+        if not alert:
+            raise ValueError("Alert not found")
+
+        log_id = str(alert.get("log_id") or "")
+        if not log_id:
+            raise ValueError("Linked log is missing for this alert")
+
+        log_doc = await self._logs.get_by_id(log_id)
+        if not log_doc:
+            raise ValueError("Linked log not found")
+
+        fingerprint = await self._promotions.register_manual_promotion(
+            log_doc=log_doc,
+            classification=classification,
+            created_by=confirmed_by,
+            notes=notes,
+        )
+        normalized = self._promotions.validate_label(
+            self._promotions.normalize_classification_label(classification)
+        )
+
+        await self._alerts.update_alert_fields(
+            alert_id,
+            {
+                "alert_type": "known_attack",
+                "classification": normalized,
+                "severity": "high",
+                "metadata.feedback": {
+                    "verdict": "confirmed_known_attack",
+                    "by": confirmed_by,
+                    "at": datetime.utcnow(),
+                    "notes": notes,
+                    "fingerprint": fingerprint,
+                },
+                "metadata.manual_promotion": {
+                    "fingerprint": fingerprint,
+                    "classification": normalized,
+                    "confirmed_by": confirmed_by,
+                    "notes": notes,
+                    "confirmed_at": datetime.utcnow(),
+                },
+            },
+        )
+        await self._logs.update_fields_by_id(
+            log_id,
+            {
+                "ml_result.alert_type": "known_attack",
+                "ml_result.classification": normalized,
+                "ml_result.score": 1.0,
+                "metadata.feedback": {
+                    "verdict": "confirmed_known_attack",
+                    "by": confirmed_by,
+                    "at": datetime.utcnow(),
+                    "notes": notes,
+                    "fingerprint": fingerprint,
+                },
+                "metadata.manual_promotion": {
+                    "fingerprint": fingerprint,
+                    "classification": normalized,
+                    "confirmed_by": confirmed_by,
+                    "notes": notes,
+                    "confirmed_at": datetime.utcnow(),
+                },
+            },
+        )
+        return {
+            "alert_id": alert_id,
+            "fingerprint": fingerprint,
+            "classification": normalized,
+        }
+
+    async def mark_false_positive(
+        self,
+        alert_id: str,
+        reviewed_by: str,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        alert = await self._alerts.get_alert(alert_id)
+        if not alert:
+            raise ValueError("Alert not found")
+        log_id = str(alert.get("log_id") or "")
+        if not log_id:
+            raise ValueError("Linked log is missing for this alert")
+        log_doc = await self._logs.get_by_id(log_id)
+        if not log_doc:
+            raise ValueError("Linked log not found")
+
+        fingerprint = await self._suppressions.mark_false_positive(
+            log_doc=log_doc,
+            created_by=reviewed_by,
+            notes=notes,
+        )
+        feedback = {
+            "verdict": "false_positive",
+            "by": reviewed_by,
+            "at": datetime.utcnow(),
+            "notes": notes,
+            "fingerprint": fingerprint,
+        }
+        await self._alerts.update_alert_fields(
+            alert_id,
+            {
+                "metadata.feedback": feedback,
+                "metadata.suppression": {
+                    "fingerprint": fingerprint,
+                    "active": True,
+                    "reason": "false_positive",
+                },
+            },
+        )
+        await self._logs.update_fields_by_id(
+            log_id,
+            {
+                "metadata.feedback": feedback,
+                "metadata.suppression": {
+                    "fingerprint": fingerprint,
+                    "active": True,
+                    "reason": "false_positive",
+                },
+            },
+        )
+        return {
+            "alert_id": alert_id,
+            "fingerprint": fingerprint,
+        }
 
     async def get_alert_analytics(self) -> Dict[str, Any]:
         alert_rows = await self._alerts.list_alerts_for_analytics()

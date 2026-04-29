@@ -42,6 +42,7 @@ class _FakeLogRepository:
         self._logs = logs
         self.done_calls = []
         self.error_calls = []
+        self.skipped_calls = []
         self.created_payload = None
 
     async def fetch_batch(self, limit):
@@ -52,6 +53,9 @@ class _FakeLogRepository:
 
     async def mark_ml_error(self, log_id, error):
         self.error_calls.append((log_id, error))
+
+    async def mark_ml_skipped(self, log_id, reason, model_version):
+        self.skipped_calls.append((log_id, reason, model_version))
 
     async def create_log(self, payload):
         self.created_payload = payload
@@ -65,6 +69,11 @@ class _FakeAlertService:
     async def create_or_get_alert(self, **kwargs):
         self.calls.append(kwargs)
         return "alert-id"
+
+
+class _NoopSuppressionService:
+    async def resolve_suppression(self, _log):
+        return None
 
 
 def test_fetch_batch_filters_to_unprocessed_logs() -> None:
@@ -120,6 +129,7 @@ def test_run_batch_inference_marks_done_and_error_and_continues() -> None:
     )
     service._logs = fake_logs
     service._alerts = fake_alerts
+    service._suppressions = _NoopSuppressionService()
 
     async def fake_infer_single(log):
         if log["_id"] == "log-1":
@@ -152,6 +162,7 @@ def test_run_batch_inference_creates_alert_for_non_benign() -> None:
     )
     service._logs = fake_logs
     service._alerts = fake_alerts
+    service._suppressions = _NoopSuppressionService()
 
     async def fake_infer_single(_log):
         return {"alert_type": "known_attack", "classification": "SSH_BRUTE", "score": 1.0}, "cloud-api"
@@ -233,7 +244,11 @@ def test_map_cloud_prediction_benign_has_no_classification() -> None:
 
     result = service._map_cloud_prediction("BENIGN")
 
-    assert result == {"alert_type": "benign", "classification": None, "score": 0.0}
+    assert result["alert_type"] == "benign"
+    assert result["classification"] is None
+    assert result["score"] == 0.0
+    assert result["if_used"] is True
+    assert result["raw_prediction"] == "BENIGN"
 
 
 def test_map_cloud_prediction_known_attack_without_suffix_has_no_classification() -> None:
@@ -245,3 +260,61 @@ def test_map_cloud_prediction_known_attack_without_suffix_has_no_classification(
     assert result["alert_type"] == "known_attack"
     assert result["classification"] is None
     assert result["score"] == 1.0
+    assert result["if_used"] is False
+
+
+def test_map_cloud_prediction_unknown_attack_normalized_to_anomaly() -> None:
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+
+    result = service._map_cloud_prediction("UNKNOWN_ATTACK")
+
+    assert result["alert_type"] == "anomaly"
+    assert result["classification"] is None
+    assert result["if_used"] is True
+
+
+def test_get_skip_reason_only_skips_non_web_wazuh_decoders() -> None:
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+
+    non_wazuh = {"metadata": {}}
+    assert service.get_skip_reason(non_wazuh) is None
+
+    web_log = {"metadata": {"raw_wazuh_payload": {"decoder": {"name": "web-accesslog"}}}}
+    assert service.get_skip_reason(web_log) is None
+
+    systemd_log = {"metadata": {"raw_wazuh_payload": {"decoder": {"name": "systemd"}}}}
+    assert service.get_skip_reason(systemd_log) == "decoder_not_supported_v1"
+
+
+def test_run_batch_inference_skips_suppressed_logs() -> None:
+    logs = [{"_id": "log-s1", "source": "api", "message": "noise"}]
+    fake_logs = _FakeLogRepository(logs)
+    fake_alerts = _FakeAlertService()
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(
+        model_api_url="http://127.0.0.1:8010",
+        model_api_timeout_seconds=5,
+        anomaly_score_threshold=0.65,
+    )
+    service._logs = fake_logs
+    service._alerts = fake_alerts
+
+    class _SuppressionService:
+        async def resolve_suppression(self, _log):
+            return {"fingerprint": "abc123", "reason": "false_positive"}
+
+    service._suppressions = _SuppressionService()
+
+    async def should_not_run(_log):
+        raise AssertionError("infer_single_log should not run for suppressed logs")
+
+    service.infer_single_log = should_not_run  # type: ignore[method-assign]
+
+    result = asyncio.run(service.run_batch_inference(10))
+
+    assert result == {"processed": 1, "alerts": 0}
+    assert fake_logs.skipped_calls == [("log-s1", "suppressed_false_positive", "cloud-api")]
+    assert fake_logs.done_calls == []
+    assert fake_logs.error_calls == []

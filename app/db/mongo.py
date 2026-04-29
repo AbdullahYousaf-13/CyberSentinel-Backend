@@ -98,3 +98,16 @@ async def ensure_indexes() -> None:
     await db.get_collection("raw_wazuh_logs").create_index(
         [("processing.status", ASCENDING), ("processing.next_retry_at", ASCENDING)]
     )
+    await db.get_collection("ml_promotions").create_index(
+        [("fingerprint", ASCENDING)],
+        unique=True,
+        sparse=True,
+    )
+    await db.get_collection("ml_promotions").create_index([("active", ASCENDING), ("updated_at", DESCENDING)])
+    await db.get_collection("ml_retrain_jobs").create_index([("created_at", DESCENDING)])
+    await db.get_collection("ml_suppressions").create_index(
+        [("fingerprint", ASCENDING)],
+        unique=True,
+        sparse=True,
+    )
+    await db.get_collection("ml_suppressions").create_index([("active", ASCENDING), ("updated_at", DESCENDING)])
