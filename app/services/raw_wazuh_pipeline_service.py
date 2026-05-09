@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
 from app.db.repositories.raw_wazuh_log_repository import RawWazuhLogRepository
-from app.ml.features.feature_extractor import FeatureExtractor
+from app.ml.features.wazuh_feature_engineer import WazuhFamilyFeatureEngineer
 from app.services.alert_service import AlertService
 from app.services.ml_service import MLService
 
@@ -31,7 +31,7 @@ class RawWazuhPipelineService:
         self._logs = LogRepository()
         self._alerts = AlertService()
         self._ml = MLService(settings)
-        self._extractor = FeatureExtractor()
+        self._extractor = WazuhFamilyFeatureEngineer()
 
     async def ingest_batch(self, logs: List[Any], sent_at_ms: int) -> Dict[str, int]:
         incoming_count = len(logs)
@@ -135,7 +135,31 @@ class RawWazuhPipelineService:
             await self._raw_repo.mark_done(ingest_key, log_id)
             return
 
+        await self._ml.refresh_model_catalog()
         skip_reason = self._ml.get_skip_reason(stored)
+        if skip_reason == "rules_only_family_not_trained":
+            result, model_version = self._ml.infer_rules_only(stored)
+            await self._logs.mark_ml_done(log_id_obj, result, model_version)
+            if result["alert_type"] != "benign":
+                severity = "high" if result["alert_type"] == "known_attack" else "medium"
+                await self._alerts.create_or_get_alert(
+                    log_id=log_id,
+                    alert_type=result["alert_type"],
+                    severity=severity,
+                    model_version=model_version,
+                    metadata={
+                        "source": stored.get("source"),
+                        "message": (stored.get("message") or "")[:200],
+                        "model_family": result.get("model_family"),
+                        "feature_schema_version": result.get("feature_schema_version"),
+                        "classification_source": result.get("classification_source"),
+                        "rules_reason": result.get("rules_reason"),
+                    },
+                    classification=result.get("classification"),
+                    anomaly_score=float(result.get("score", 0.0)),
+                )
+            await self._raw_repo.mark_done(ingest_key, log_id)
+            return
         if skip_reason:
             await self._logs.mark_ml_skipped(log_id_obj, skip_reason, self._ml._model_version)
             await self._raw_repo.mark_done(ingest_key, log_id)
@@ -155,7 +179,12 @@ class RawWazuhPipelineService:
                 alert_type=result["alert_type"],
                 severity=severity,
                 model_version=model_version,
-                metadata={"source": stored.get("source"), "message": (stored.get("message") or "")[:200]},
+                metadata={
+                    "source": stored.get("source"),
+                    "message": (stored.get("message") or "")[:200],
+                    "model_family": result.get("model_family"),
+                    "feature_schema_version": result.get("feature_schema_version"),
+                },
                 classification=result.get("classification"),
                 anomaly_score=float(result.get("score", 0.0)),
             )
@@ -169,24 +198,20 @@ class RawWazuhPipelineService:
 
         level = int(rule.get("level", 0) or 0)
         severity = "high" if level >= 12 else "medium" if level >= 7 else "low"
-        message = str(rule.get("description") or payload.get("full_log") or decoder.get("name") or "wazuh alert")
+        message = str(payload.get("full_log") or rule.get("description") or decoder.get("name") or "wazuh alert")
         timestamp = self._parse_timestamp(payload.get("timestamp"))
         source = str(agent.get("name") or "wazuh")
 
-        flattened = self._flatten_payload(payload)
-        flattened["severity"] = severity
-        features_vector = self._extractor.transform([{"metadata": flattened}])[0]
-        engineered_features = {
-            feature_name: float(features_vector[idx])
-            for idx, feature_name in enumerate(self._extractor.CICIDS_2017_FEATURES)
-        }
+        engineered_bundle = self._extractor.engineer_payload(payload, message_override=message)
 
         metadata: Dict[str, Any] = {
             "raw_ingest_key": ingest_key,
             "raw_wazuh_payload": payload,
-            "engineered_features_78": engineered_features,
+            "model_family": engineered_bundle.get("model_family"),
+            "feature_schema_version": engineered_bundle.get("feature_schema_version"),
+            "engineered_features": engineered_bundle.get("engineered_features", {}),
+            "ml_routing_reason": engineered_bundle.get("routing_reason"),
         }
-        metadata.update(engineered_features)
 
         return {
             "timestamp": timestamp,
@@ -197,27 +222,6 @@ class RawWazuhPipelineService:
             "ingested_at": datetime.utcnow(),
             "ml_status": "pending",
         }
-
-    @staticmethod
-    def _flatten_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-        flattened: Dict[str, Any] = {}
-
-        def _visit(prefix: str, value: Any) -> None:
-            if isinstance(value, dict):
-                for key, inner in value.items():
-                    next_prefix = f"{prefix}_{key}" if prefix else str(key)
-                    _visit(next_prefix, inner)
-                return
-            if isinstance(value, list):
-                for idx, inner in enumerate(value):
-                    next_prefix = f"{prefix}_{idx}" if prefix else str(idx)
-                    _visit(next_prefix, inner)
-                return
-            if prefix:
-                flattened[prefix] = value
-
-        _visit("", payload)
-        return flattened
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:

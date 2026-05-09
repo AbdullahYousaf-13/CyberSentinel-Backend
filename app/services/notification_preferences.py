@@ -36,10 +36,10 @@ def compute_next_digest_at(now_utc: datetime, timezone_name: str) -> datetime:
         local_tz = ZoneInfo(DEFAULT_TIMEZONE)
     except ZoneInfoNotFoundError:
         logger.warning(
-            "Could not resolve '%s'; using UTC for digest scheduling",
+            "Could not resolve '%s'; using fixed UTC+05:00 for digest scheduling",
             DEFAULT_TIMEZONE,
         )
-        local_tz = timezone.utc
+        local_tz = timezone(timedelta(hours=5))
     local_now = aware_now.astimezone(local_tz)
     local_target = local_now.replace(hour=DAILY_DIGEST_HOUR, minute=0, second=0, microsecond=0)
     if local_now >= local_target:

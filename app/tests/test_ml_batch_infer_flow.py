@@ -130,6 +130,7 @@ def test_run_batch_inference_marks_done_and_error_and_continues() -> None:
     service._logs = fake_logs
     service._alerts = fake_alerts
     service._suppressions = _NoopSuppressionService()
+    service.refresh_model_catalog = lambda force=False: asyncio.sleep(0)  # type: ignore[method-assign]
 
     async def fake_infer_single(log):
         if log["_id"] == "log-1":
@@ -163,6 +164,7 @@ def test_run_batch_inference_creates_alert_for_non_benign() -> None:
     service._logs = fake_logs
     service._alerts = fake_alerts
     service._suppressions = _NoopSuppressionService()
+    service.refresh_model_catalog = lambda force=False: asyncio.sleep(0)  # type: ignore[method-assign]
 
     async def fake_infer_single(_log):
         return {"alert_type": "known_attack", "classification": "SSH_BRUTE", "score": 1.0}, "cloud-api"
@@ -277,6 +279,7 @@ def test_map_cloud_prediction_unknown_attack_normalized_to_anomaly() -> None:
 def test_get_skip_reason_only_skips_non_web_wazuh_decoders() -> None:
     service = MLService.__new__(MLService)
     service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+    MLService._active_family_versions = {"web_access": "web-access-v1"}
 
     non_wazuh = {"metadata": {}}
     assert service.get_skip_reason(non_wazuh) is None
@@ -285,7 +288,32 @@ def test_get_skip_reason_only_skips_non_web_wazuh_decoders() -> None:
     assert service.get_skip_reason(web_log) is None
 
     systemd_log = {"metadata": {"raw_wazuh_payload": {"decoder": {"name": "systemd"}}}}
-    assert service.get_skip_reason(systemd_log) == "decoder_not_supported_v1"
+    assert service.get_skip_reason(systemd_log) == "rules_only_family_not_trained"
+
+
+def test_map_structured_prediction_keeps_real_scores() -> None:
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+
+    result = service._map_cloud_prediction(
+        {
+            "alert_type": "known_attack",
+            "classification": "PATH_TRAVERSAL",
+            "classification_confidence": 0.92,
+            "novelty_score": None,
+            "decision_score": 0.88,
+            "model_family": "web_access",
+            "model_version": "20260509120000",
+            "feature_schema_version": "web_access_v1",
+        }
+    )
+
+    assert result["alert_type"] == "known_attack"
+    assert result["classification"] == "PATH_TRAVERSAL"
+    assert result["score"] == 0.88
+    assert result["classification_confidence"] == 0.92
+    assert result["model_family"] == "web_access"
+    assert result["feature_schema_version"] == "web_access_v1"
 
 
 def test_run_batch_inference_skips_suppressed_logs() -> None:
@@ -300,6 +328,7 @@ def test_run_batch_inference_skips_suppressed_logs() -> None:
     )
     service._logs = fake_logs
     service._alerts = fake_alerts
+    service.refresh_model_catalog = lambda force=False: asyncio.sleep(0)  # type: ignore[method-assign]
 
     class _SuppressionService:
         async def resolve_suppression(self, _log):

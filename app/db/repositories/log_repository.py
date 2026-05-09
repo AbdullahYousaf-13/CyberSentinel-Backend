@@ -108,7 +108,11 @@ class LogRepository:
             },
         )
 
-    async def list_logs_by_ids(self, log_ids: List[str]) -> List[Dict[str, Any]]:
+    async def list_logs_by_ids(
+        self,
+        log_ids: List[str],
+        projection: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         object_ids = []
         for log_id in log_ids:
             try:
@@ -117,14 +121,15 @@ class LogRepository:
                 continue
         if not object_ids:
             return []
-        cursor = self._collection.find({"_id": {"$in": object_ids}})
+        cursor = self._collection.find({"_id": {"$in": object_ids}}, projection)
         return await cursor.to_list(length=len(object_ids))
 
-    async def list_web_benign_logs(self, limit: int) -> List[Dict[str, Any]]:
+    async def list_family_benign_logs(self, model_family: str, limit: int) -> List[Dict[str, Any]]:
         query = {
             "ml_result.alert_type": "benign",
-            "metadata.raw_wazuh_payload.decoder.name": "web-accesslog",
-            "metadata.engineered_features_78": {"$exists": True},
+            "metadata.model_family": model_family,
+            "metadata.feature_schema_version": {"$exists": True},
+            "metadata.engineered_features": {"$exists": True},
         }
         cursor = self._collection.find(query).sort("timestamp", -1).limit(limit)
         return await cursor.to_list(length=limit)

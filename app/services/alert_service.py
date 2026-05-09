@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from app.core.config import get_settings
 from app.db.repositories.log_repository import LogRepository
+from app.services.log_context_service import build_normalized_log_context
 from app.core.websocket import manager
 from app.db.repositories.alert_repository import AlertRepository
 from app.services.ml_promotion_service import MLPromotionService
@@ -37,6 +38,17 @@ def _humanize_label(value: str) -> str:
     if value == "uncategorized":
         return "Uncategorized"
     return " ".join(part.capitalize() for part in value.split("_") if part)
+
+
+def _active_alert_clause() -> Dict[str, Any]:
+    return {"$or": [{"status": {"$exists": False}}, {"status": "open"}]}
+
+
+def _merge_active_filter(filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    base = _active_alert_clause()
+    if not filters:
+        return base
+    return {"$and": [base, filters]}
 
 
 def _resolve_distribution_key(alert: Dict[str, Any]) -> str:
@@ -161,6 +173,7 @@ class AlertService:
             "log_id": log_id,
             "alert_type": alert_type,
             "severity": severity,
+            "status": "open",
             "classification": _normalize_classification(classification),
             "anomaly_score": anomaly_score,
             "model_version": model_version,
@@ -188,6 +201,7 @@ class AlertService:
             "log_id": log_id,
             "alert_type": alert_type,
             "severity": severity,
+            "status": "open",
             "classification": _normalize_classification(classification),
             "anomaly_score": anomaly_score,
             "model_version": model_version,
@@ -207,10 +221,20 @@ class AlertService:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
     ) -> list:
-        return await self._alerts.list_alerts(limit=limit, offset=offset, filters=filters)
+        query = _merge_active_filter(filters)
+        alerts = await self._alerts.list_alerts(limit=limit, offset=offset, filters=query)
+        return await self._attach_log_context(alerts)
+
+    async def count_alerts(self, filters: Optional[Dict[str, Any]] = None) -> int:
+        query = _merge_active_filter(filters)
+        return await self._alerts.count_alerts(filters=query)
 
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
-        return await self._alerts.get_alert(alert_id)
+        alert = await self._alerts.get_alert(alert_id)
+        if not alert:
+            return None
+        enriched = await self._attach_log_context([alert])
+        return enriched[0] if enriched else alert
 
     async def confirm_known_attack(
         self,
@@ -347,22 +371,37 @@ class AlertService:
         }
 
     async def get_alert_analytics(self) -> Dict[str, Any]:
-        alert_rows = await self._alerts.list_alerts_for_analytics()
+        try:
+            alert_rows = await self._alerts.list_alerts_for_analytics(filters=_active_alert_clause())
+        except TypeError:
+            # Backward compatibility for tests and older repository stubs that do not
+            # yet accept the optional filters argument.
+            alert_rows = await self._alerts.list_alerts_for_analytics()
         total_alerts = len(alert_rows)
         if total_alerts == 0:
             return {
                 "trend": {"unit": "day", "points": []},
                 "distribution": [],
                 "total_alerts": 0,
+                "severity_counts": {"high": 0, "medium": 0, "low": 0},
                 "first_alert_at": None,
                 "last_alert_at": None,
             }
 
         distribution_counts: Dict[str, int] = {}
+        severity_counts = {"high": 0, "medium": 0, "low": 0}
         created_at_values: list[datetime] = []
         for row in alert_rows:
             key = _resolve_distribution_key(row)
             distribution_counts[key] = distribution_counts.get(key, 0) + 1
+
+            severity = str(row.get("severity") or "").strip().lower()
+            if severity in {"critical", "high"}:
+                severity_counts["high"] += 1
+            elif severity == "medium":
+                severity_counts["medium"] += 1
+            else:
+                severity_counts["low"] += 1
 
             created_at = row.get("created_at")
             if isinstance(created_at, datetime):
@@ -387,6 +426,7 @@ class AlertService:
                 "trend": {"unit": "day", "points": []},
                 "distribution": distribution,
                 "total_alerts": total_alerts,
+                "severity_counts": severity_counts,
                 "first_alert_at": None,
                 "last_alert_at": None,
             }
@@ -422,6 +462,37 @@ class AlertService:
             "trend": {"unit": unit, "points": points},
             "distribution": distribution,
             "total_alerts": total_alerts,
+            "severity_counts": severity_counts,
             "first_alert_at": first_alert_at,
             "last_alert_at": last_alert_at,
         }
+
+    async def _attach_log_context(self, alerts: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        if not alerts:
+            return alerts
+        log_ids = [str(alert.get("log_id") or "") for alert in alerts if str(alert.get("log_id") or "").strip()]
+        if not log_ids:
+            return alerts
+        logs = await self._logs.list_logs_by_ids(
+            log_ids,
+            projection={
+                "timestamp": 1,
+                "source": 1,
+                "message": 1,
+                "metadata.raw_wazuh_payload": 1,
+                "metadata.location": 1,
+                "metadata.decoder": 1,
+                "metadata.agent": 1,
+            },
+        )
+        context_by_id: Dict[str, Dict[str, Any]] = {}
+        for log in logs:
+            context_by_id[str(log.get("_id"))] = build_normalized_log_context(log)
+
+        enriched: list[Dict[str, Any]] = []
+        for alert in alerts:
+            row = dict(alert)
+            log_id = str(row.get("log_id") or "")
+            row["log_context"] = context_by_id.get(log_id)
+            enriched.append(row)
+        return enriched

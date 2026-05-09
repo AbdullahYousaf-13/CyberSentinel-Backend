@@ -66,9 +66,34 @@ async def list_alerts(
                 anomaly_score=alert.get("anomaly_score"),
                 model_version=alert["model_version"],
                 metadata=alert.get("metadata", {}),
+                log_context=alert.get("log_context"),
             )
         )
     return response
+
+
+@router.get("/count")
+async def count_alerts(
+    current_user: dict = Depends(get_current_user),
+    severity: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    start_ts: Optional[datetime] = None,
+    end_ts: Optional[datetime] = None,
+) -> dict[str, int]:
+    service = AlertService()
+    filters = {}
+    if severity:
+        filters["severity"] = severity
+    if alert_type:
+        filters["alert_type"] = alert_type
+    if start_ts or end_ts:
+        filters["created_at"] = {}
+        if start_ts:
+            filters["created_at"]["$gte"] = start_ts
+        if end_ts:
+            filters["created_at"]["$lte"] = end_ts
+    total = await service.count_alerts(filters=filters)
+    return {"total": total}
 
 
 @router.get("/analytics", response_model=AlertAnalyticsResponse)
@@ -99,6 +124,7 @@ async def get_alert(
         anomaly_score=alert.get("anomaly_score"),
         model_version=alert["model_version"],
         metadata=alert.get("metadata", {}),
+        log_context=alert.get("log_context"),
     )
 
 

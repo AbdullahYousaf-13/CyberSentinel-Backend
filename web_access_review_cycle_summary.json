@@ -1,0 +1,187 @@
+{
+  "candidate_counts": {
+    "benign_candidates": 460,
+    "attack_candidates": 729,
+    "training_attack_reviews": 701,
+    "training_benign_reviews": 432,
+    "holdout_attack": 28,
+    "holdout_benign": 28,
+    "attack_label_distribution": {
+      "COLDFUSION_PROBE": 33,
+      "GIT_PROBE": 4,
+      "PATH_TRAVERSAL": 41,
+      "PHPMYADMIN_PROBE": 2,
+      "WEBDAV_PROBE": 15,
+      "WEB_SCAN_NMAP": 625,
+      "WORDPRESS_PROBE": 9
+    }
+  },
+  "import_result": {
+    "model_family": "web_access",
+    "applied": 1133,
+    "skipped": 0,
+    "failed": 0,
+    "errors": []
+  },
+  "thresholds_after_import": {
+    "benign_required": 1000,
+    "attack_required": 200,
+    "benign_available": 522,
+    "attack_available": 734,
+    "passed": false
+  },
+  "label_distribution_after_import": {
+    "BENIGN": 522,
+    "COLDFUSION_PROBE": 33,
+    "PATH_TRAVERSAL": 41,
+    "WEBDAV_PROBE": 15,
+    "WEB_ATTACK_GENERIC": 24,
+    "WEB_SCAN_NMAP": 621
+  },
+  "pre_retrain_holdout_metrics": {
+    "samples": 56,
+    "benign_total": 28,
+    "attack_total": 28,
+    "false_positives": 0,
+    "true_positives": 22,
+    "benign_false_positive_rate": 0.0,
+    "attack_recall": 0.7857142857142857,
+    "model_versions": {
+      "20260509082056": 56
+    },
+    "mismatches": [
+      {
+        "log_id": "69fe297adb82ef37a340ce1c",
+        "expected": "attack",
+        "predicted_alert_type": "benign",
+        "predicted_classification": null,
+        "decision_score": 0.007184077160060476,
+        "path": "/",
+        "method": "OPTIONS",
+        "reason": "nmap scripted scan traffic"
+      },
+      {
+        "log_id": "69fe297cdb82ef37a340ce1e",
+        "expected": "attack",
+        "predicted_alert_type": "benign",
+        "predicted_classification": null,
+        "decision_score": 0.007184077160060476,
+        "path": "/",
+        "method": "OPTIONS",
+        "reason": "nmap scripted scan traffic"
+      },
+      {
+        "log_id": "69fe3327db82ef37a340e131",
+        "expected": "attack",
+        "predicted_alert_type": "benign",
+        "predicted_classification": null,
+        "decision_score": 0.02831730080474193,
+        "path": "/index.php/wp-json/wp/v2/posts/",
+        "method": "GET",
+        "reason": "nmap wordpress probe"
+      },
+      {
+        "log_id": "69fe297fdb82ef37a340ce21",
+        "expected": "attack",
+        "predicted_alert_type": "benign",
+        "predicted_classification": null,
+        "decision_score": 0.010365806134042421,
+        "path": "/",
+        "method": "POST",
+        "reason": "nmap scripted scan traffic"
+      },
+      {
+        "log_id": "69fe3403db82ef37a340e2f7",
+        "expected": "attack",
+        "predicted_alert_type": "benign",
+        "predicted_classification": null,
+        "decision_score": 0.04400993628083441,
+        "path": "/index.php/wp-json/wp/v2/posts/",
+        "method": "GET",
+        "reason": "nmap wordpress probe"
+      },
+      {
+        "log_id": "69fe2981db82ef37a340ce23",
+        "expected": "attack",
+        "predicted_alert_type": "benign",
+        "predicted_classification": null,
+        "decision_score": 0.013629862946049724,
+        "path": "/",
+        "method": "GET",
+        "reason": "nmap scripted scan traffic"
+      }
+    ]
+  },
+  "retrain_job": {
+    "id": "69ff1602b40cac78d9c43913",
+    "status": "failed",
+    "result": {},
+    "metrics": {},
+    "error": "At least 1000 benign samples are required before retraining"
+  },
+  "direct_fallback_train_job": {
+    "id": "dcc9c415760d488ebf0347accf26dd12",
+    "status": "succeeded",
+    "created_at": "2026-05-09T11:09:57.395066",
+    "updated_at": "2026-05-09T11:10:01.970977",
+    "reason": "web_access_review_cycle_direct_binary_bootstrap",
+    "model_family": "web_access",
+    "result": {
+      "status": "ok",
+      "version": "20260509111000",
+      "model_family": "web_access",
+      "metrics": {
+        "train_accuracy": 0.997619,
+        "validation": {
+          "binary_precision": 1.0,
+          "attack_recall": 0.99422,
+          "benign_false_positive_rate": 0.0,
+          "decision_threshold": 0.633667,
+          "predicted_attack_count": 172,
+          "predicted_attack_labels": {
+            "WEB_ATTACK_GENERIC": 172
+          },
+          "benign_support": 7,
+          "attack_support": 173
+        },
+        "test": {
+          "binary_precision": 1.0,
+          "attack_recall": 1.0,
+          "benign_false_positive_rate": 0.0,
+          "decision_threshold": 0.633667,
+          "predicted_attack_count": 10,
+          "predicted_attack_labels": {
+            "WEB_ATTACK_GENERIC": 10
+          },
+          "benign_support": 170,
+          "attack_support": 10
+        },
+        "samples": 1200,
+        "label_distribution": {
+          "0": 499,
+          "1": 701
+        }
+      },
+      "activation_gate": {
+        "passed": true,
+        "target_false_positive_rate": 0.01,
+        "target_attack_recall": 0.8
+      },
+      "active_version": "20260509111000"
+    },
+    "error": null
+  },
+  "post_retrain_holdout_metrics": {
+    "samples": 56,
+    "benign_total": 28,
+    "attack_total": 28,
+    "false_positives": 0,
+    "true_positives": 28,
+    "benign_false_positive_rate": 0.0,
+    "attack_recall": 1.0,
+    "model_versions": {
+      "20260509111000": 56
+    },
+    "mismatches": []
+  }
+}

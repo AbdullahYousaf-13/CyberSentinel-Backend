@@ -9,7 +9,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.routes import ml as ml_routes
-from app.schemas.ml import ModelVersionActivateRequest, RetrainJobCreateRequest
+from app.schemas.ml import (
+    BootstrapPreviewRequest,
+    BootstrapReviewImportRequest,
+    BootstrapReviewImportItem,
+    ModelVersionActivateRequest,
+    RetrainJobCreateRequest,
+)
 from app.services.ml_service import MLService
 
 
@@ -74,9 +80,11 @@ def test_create_retrain_job_uses_model_ops_service(monkeypatch: pytest.MonkeyPat
         def __init__(self, _settings) -> None:
             return
 
-        async def create_retrain_job(self, reason: str, requested_by: str) -> str:
+        async def create_retrain_job(self, reason: str, requested_by: str, model_family: str, dataset_mode: str) -> str:
             assert reason == "manual"
             assert requested_by == "admin@test"
+            assert model_family == "web_access"
+            assert dataset_mode == "bootstrap_plus_feedback"
             return "job-1"
 
         async def get_retrain_job(self, _job_id: str):
@@ -85,6 +93,7 @@ def test_create_retrain_job_uses_model_ops_service(monkeypatch: pytest.MonkeyPat
                 "status": "queued",
                 "reason": "manual",
                 "requested_by": "admin@test",
+                "dataset_mode": "bootstrap_plus_feedback",
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
                 "started_at": None,
@@ -96,9 +105,10 @@ def test_create_retrain_job_uses_model_ops_service(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(ml_routes, "MLModelOpsService", _FakeOps)
     monkeypatch.setattr(ml_routes, "get_settings", lambda: object())
-    payload = RetrainJobCreateRequest(reason="manual")
+    payload = RetrainJobCreateRequest(reason="manual", dataset_mode="bootstrap_plus_feedback")
     result = asyncio.run(ml_routes.create_retrain_job(payload, current_user={"email": "admin@test"}))
     assert result.id == "job-1"
+    assert result.dataset_mode == "bootstrap_plus_feedback"
 
 
 def test_rollback_model_calls_model_ops_service(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -178,3 +188,69 @@ def test_activate_suppression_calls_service(monkeypatch: pytest.MonkeyPatch) -> 
     result = asyncio.run(ml_routes.activate_suppression("abc", current_user={"email": "admin@test"}))
     assert result.fingerprint == "abc"
     assert result.active is True
+
+
+def test_preview_bootstrap_dataset_calls_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeBootstrap:
+        async def preview_dataset(self, model_family: str, scan_limit: int, preview_limit: int, include_feedback_overrides: bool, min_class_support: int):
+            assert model_family == "auth"
+            assert scan_limit == 250
+            assert preview_limit == 10
+            assert include_feedback_overrides is True
+            assert min_class_support == 5
+            return {
+                "model_family": "auth",
+                "feature_schema_version": "auth_v1",
+                "scanned_logs": 250,
+                "usable_samples": 200,
+                "skipped_logs": 50,
+                "feedback_override_count": 3,
+                "label_distribution": {"AUTH_ATTACK_GENERIC": 25, "BENIGN": 175},
+                "raw_label_distribution": {"AUTH_BRUTE_FORCE": 5, "BENIGN": 175, "SUDO_POLICY_VIOLATION": 20},
+                "verdict_distribution": {"confirmed_benign": 175, "confirmed_known_attack": 25},
+                "thresholds": {
+                    "benign_required": 1000,
+                    "attack_required": 200,
+                    "benign_available": 175,
+                    "attack_available": 25,
+                    "passed": False,
+                },
+                "rows": [],
+            }
+
+    monkeypatch.setattr(ml_routes, "WazuhBootstrapService", _FakeBootstrap)
+    payload = BootstrapPreviewRequest(
+        model_family="auth",
+        scan_limit=250,
+        preview_limit=10,
+        include_feedback_overrides=True,
+        min_class_support=5,
+    )
+    result = asyncio.run(ml_routes.preview_bootstrap_dataset(payload, current_user={"email": "admin@test"}))
+    assert result.model_family == "auth"
+    assert result.thresholds.passed is False
+
+
+def test_import_bootstrap_reviews_calls_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeBootstrap:
+        async def import_reviews(self, model_family: str, items, reviewed_by: str):
+            assert model_family == "web_access"
+            assert reviewed_by == "admin@test"
+            assert items[0]["log_id"] == "l1"
+            assert items[0]["review_verdict"] == "false_positive"
+            return {
+                "model_family": "web_access",
+                "applied": 1,
+                "skipped": 0,
+                "failed": 0,
+                "errors": [],
+            }
+
+    monkeypatch.setattr(ml_routes, "WazuhBootstrapService", _FakeBootstrap)
+    payload = BootstrapReviewImportRequest(
+        model_family="web_access",
+        items=[BootstrapReviewImportItem(log_id="l1", review_verdict="false_positive", notes="noise")],
+    )
+    result = asyncio.run(ml_routes.import_bootstrap_reviews(payload, current_user={"email": "admin@test"}))
+    assert result.applied == 1
+    assert result.failed == 0

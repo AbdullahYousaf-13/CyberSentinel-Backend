@@ -82,6 +82,7 @@ async def ensure_indexes() -> None:
     )
     await db.get_collection("logs").create_index([("ml_status", ASCENDING), ("timestamp", DESCENDING)])
     await db.get_collection("alerts").create_index([("created_at", DESCENDING)])
+    await db.get_collection("alerts").create_index([("status", ASCENDING), ("created_at", DESCENDING)])
     await db.get_collection("alerts").create_index("severity")
     await db.get_collection("alerts").create_index("alert_type")
     try:
@@ -105,6 +106,7 @@ async def ensure_indexes() -> None:
     )
     await db.get_collection("ml_promotions").create_index([("active", ASCENDING), ("updated_at", DESCENDING)])
     await db.get_collection("ml_retrain_jobs").create_index([("created_at", DESCENDING)])
+    await db.get_collection("ml_backfill_jobs").create_index([("created_at", DESCENDING)])
     await db.get_collection("ml_suppressions").create_index(
         [("fingerprint", ASCENDING)],
         unique=True,

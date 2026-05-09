@@ -39,6 +39,10 @@ class AlertRepository:
         )
         return await cursor.to_list(length=limit)
 
+    async def count_alerts(self, filters: Optional[Dict[str, Any]] = None) -> int:
+        query = filters or {}
+        return await self._collection.count_documents(query)
+
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
         return await self._collection.find_one({"_id": ObjectId(alert_id)})
 
@@ -62,9 +66,9 @@ class AlertRepository:
         cursor = self._collection.find(query).sort("created_at", 1).limit(limit)
         return await cursor.to_list(length=limit)
 
-    async def list_alerts_for_analytics(self) -> List[Dict[str, Any]]:
+    async def list_alerts_for_analytics(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         cursor = self._collection.find(
-            {},
+            filters or {},
             {
                 "_id": 0,
                 "created_at": 1,
@@ -72,6 +76,7 @@ class AlertRepository:
                 "alert_type": 1,
                 "attack_type": 1,
                 "type": 1,
+                "severity": 1,
             },
         ).sort("created_at", 1)
         results: List[Dict[str, Any]] = []

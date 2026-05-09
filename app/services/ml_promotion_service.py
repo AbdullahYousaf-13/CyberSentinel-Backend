@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
 from app.db.repositories.promotion_repository import PromotionRepository
+from app.ml.features.wazuh_feature_engineer import WazuhFamilyFeatureEngineer
 
 
 _KNOWN_ATTACK_LABELS = {
@@ -76,6 +77,16 @@ class MLPromotionService:
         metadata = log_doc.get("metadata") or {}
         if not isinstance(metadata, dict):
             return None
+        engineer = WazuhFamilyFeatureEngineer()
+        structured = engineer.build_prediction_payload(log_doc)
+        if structured:
+            family = str(structured.get("model_family") or "").strip().lower()
+            sample = structured.get("sample")
+            if isinstance(sample, dict):
+                fingerprint = MLPromotionService._family_fingerprint(family, sample)
+                if fingerprint:
+                    return fingerprint
+
         raw = metadata.get("raw_wazuh_payload")
         if not isinstance(raw, dict):
             return None
@@ -98,6 +109,64 @@ class MLPromotionService:
         family = _user_agent_family(ua)
         base = f"{decoder_name}|{srcip}|{method}|{path}|{family}"
         if not base.strip("|"):
+            return None
+        return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _family_fingerprint(model_family: str, sample: Dict[str, Any]) -> Optional[str]:
+        numeric = sample.get("numeric") if isinstance(sample.get("numeric"), dict) else {}
+        categorical = sample.get("categorical") if isinstance(sample.get("categorical"), dict) else {}
+        text = sample.get("text") if isinstance(sample.get("text"), dict) else {}
+
+        base = ""
+        if model_family == WazuhFamilyFeatureEngineer.FAMILY_WEB_ACCESS:
+            base = "|".join(
+                [
+                    model_family,
+                    str(categorical.get("host_ip") or ""),
+                    str(categorical.get("method") or ""),
+                    str(categorical.get("route_template") or ""),
+                    str(categorical.get("user_agent_family") or ""),
+                ]
+            )
+        elif model_family == WazuhFamilyFeatureEngineer.FAMILY_AUTH:
+            base = "|".join(
+                [
+                    model_family,
+                    str(categorical.get("agent_name") or ""),
+                    str(categorical.get("decoder_name") or ""),
+                    str(categorical.get("action") or ""),
+                    str(categorical.get("result") or ""),
+                    str(categorical.get("account") or ""),
+                    str(categorical.get("source_ip") or ""),
+                ]
+            )
+        elif model_family == WazuhFamilyFeatureEngineer.FAMILY_HOST:
+            base = "|".join(
+                [
+                    model_family,
+                    str(categorical.get("agent_name") or ""),
+                    str(categorical.get("decoder_name") or ""),
+                    str(categorical.get("rule_id") or ""),
+                    str(categorical.get("program_name") or ""),
+                    str(categorical.get("severity") or ""),
+                    str(text.get("title") or ""),
+                ]
+            )
+        elif model_family == WazuhFamilyFeatureEngineer.FAMILY_INTEGRITY:
+            base = "|".join(
+                [
+                    model_family,
+                    str(categorical.get("agent_name") or ""),
+                    str(categorical.get("decoder_name") or ""),
+                    str(categorical.get("rule_id") or ""),
+                    str(categorical.get("result") or ""),
+                    str(categorical.get("target") or ""),
+                    str(numeric.get("is_failed_result") or ""),
+                ]
+            )
+
+        if not base or not base.strip("|"):
             return None
         return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
@@ -131,4 +200,3 @@ class MLPromotionService:
             "fingerprint": fingerprint,
             "classification": found.get("classification"),
         }
-
