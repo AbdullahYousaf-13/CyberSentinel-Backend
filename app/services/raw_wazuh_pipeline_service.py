@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
 from app.db.repositories.raw_wazuh_log_repository import RawWazuhLogRepository
-from app.ml.features.feature_extractor import FeatureExtractor
+from app.ml.features.wazuh_feature_extractor import WazuhFeatureExtractor
 from app.services.alert_service import AlertService
 from app.services.ml_service import MLService
 
@@ -31,7 +31,7 @@ class RawWazuhPipelineService:
         self._logs = LogRepository()
         self._alerts = AlertService()
         self._ml = MLService(settings)
-        self._extractor = FeatureExtractor()
+        self._extractor = WazuhFeatureExtractor()
 
     async def ingest_batch(self, logs: List[Any], sent_at_ms: int) -> Dict[str, int]:
         incoming_count = len(logs)
@@ -178,13 +178,14 @@ class RawWazuhPipelineService:
         features_vector = self._extractor.transform([{"metadata": flattened}])[0]
         engineered_features = {
             feature_name: float(features_vector[idx])
-            for idx, feature_name in enumerate(self._extractor.CICIDS_2017_FEATURES)
+            for idx, feature_name in enumerate(self._extractor.FEATURE_NAMES)
         }
 
         metadata: Dict[str, Any] = {
             "raw_ingest_key": ingest_key,
             "raw_wazuh_payload": payload,
-            "engineered_features_78": engineered_features,
+            "engineered_features_v1": engineered_features,
+            "engineered_feature_schema": self._extractor.SCHEMA_ID,
         }
         metadata.update(engineered_features)
 

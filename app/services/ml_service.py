@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 
 from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
-from app.ml.features.feature_extractor import FeatureExtractor
+from app.ml.features.wazuh_feature_extractor import WazuhFeatureExtractor
 from app.services.alert_service import AlertService
 from app.services.ml_promotion_service import MLPromotionService
 from app.services.ml_suppression_service import MLSuppressionService
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class MLService:
-    _feature_extractor = FeatureExtractor()
+    _feature_extractor = WazuhFeatureExtractor()
     _model_version: str = "cloud-api"
     _supported_decoder_scope = {"web-accesslog"}
 
@@ -152,6 +152,20 @@ class MLService:
                     continue
 
                 if response.status_code < 400:
+                    if health_url.endswith("/health"):
+                        try:
+                            body = response.json()
+                        except ValueError:
+                            return
+                        expected = body.get("expected_feature_count")
+                        current = len(cls._feature_extractor.FEATURE_NAMES)
+                        if isinstance(expected, int) and expected != current:
+                            logger.warning(
+                                "Cloud model feature mismatch: cloud expects %s, backend produces %s. "
+                                "Retrain/activate a model compatible with wazuh_native_v1.",
+                                expected,
+                                current,
+                            )
                     return
                 errors.append(f"{health_url} -> HTTP {response.status_code}")
 
@@ -206,12 +220,18 @@ class MLService:
         for name, kwargs in attempts:
             response = await client.post(predict_url, **kwargs)
             if response.status_code >= 400:
+                if response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY:
+                    detail_text = response.text[:500]
+                    raise httpx.HTTPError(
+                        "Cloud model rejected feature vector (422). "
+                        "Likely feature-schema mismatch between backend and model. "
+                        f"Response: {detail_text}"
+                    )
                 if response.status_code in {
                     status.HTTP_400_BAD_REQUEST,
                     status.HTTP_404_NOT_FOUND,
                     status.HTTP_405_METHOD_NOT_ALLOWED,
                     status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                 }:
                     logger.debug(

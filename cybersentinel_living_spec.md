@@ -345,18 +345,14 @@ Current source filter behavior:
 
 ### 9.1 Feature extraction
 
-The backend feature extractor is the operational contract for inference and expects a 78-feature vector aligned to CICIDS2017-style fields.
+Primary v1 path uses a Wazuh-native feature schema (`wazuh_native_v1`) built from raw Wazuh event fields and message-derived behavior signals.
 
 Properties:
 
-- Fixed output shape: 78 features
-- Alias-aware key normalization
+- Fixed output shape: 40 features
+- Inputs include rule metadata, decoder/agent identity buckets, HTTP/message pattern flags, and repetition/rate context
 - Missing or non-numeric values default to `0.0`
-- String severities map to numeric values:
-  - `low` -> `0.2`
-  - `medium` -> `0.5`
-  - `high` -> `0.8`
-  - `critical` -> `1.0`
+- Legacy CICIDS-style extractor remains as fallback compatibility path for older model versions
 
 ### 9.2 Local model registry
 
@@ -422,9 +418,37 @@ Retraining is manual and API-triggered.
 
 Current backend training behavior:
 
-- Isolation Forest is trained on the full provided feature matrix.
-- Random Forest is trained on the provided feature matrix and labels.
+- Bootstrap dataset can be built directly from raw Wazuh logs via `RAW_WAZUH_TRAINING_PATH`.
+- Auto-labeling maps events into v1 known-attack taxonomy plus `other_attack`.
+- Rare attack classes below `MIN_SAMPLES_PER_ATTACK_CLASS` can be collapsed into `other_attack`.
+- Analyst feedback (`false_positive`, `confirmed_known_attack`) is merged into dataset as additional corrections.
+- Isolation Forest is trained on benign subset.
+- Random Forest is trained on full labeled matrix.
 - New model version is saved and immediately activated.
+
+Current v1 known-attack taxonomy:
+
+- `nosql_injection`
+- `sql_injection`
+- `xss`
+- `csrf`
+- `path_traversal`
+- `file_inclusion`
+- `command_injection`
+- `ssh_bruteforce`
+- `web_login_bruteforce`
+- `password_spray`
+- `account_enumeration`
+- `credential_stuffing`
+- `web_scanner`
+- `nmap_basic_scan`
+- `nmap_advanced_scan`
+- `nmap_evasion_scan`
+- `sensitive_file_probe`
+- `suspicious_automation`
+- `dos_http_flood`
+- `ddos_l7_flood`
+- `other_attack`
 
 Rollback behavior:
 

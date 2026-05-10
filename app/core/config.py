@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     model_api_url: Optional[str] = Field(None, env="MODEL_API_URL")
     model_api_timeout_seconds: int = Field(10, env="MODEL_API_TIMEOUT_SECONDS")
     model_admin_token: Optional[str] = Field(None, env="MODEL_ADMIN_TOKEN")
+    raw_wazuh_training_path: str = Field(
+        "C:/Users/anumy/Downloads/cybersentinel_raw_wazuh_logs.json",
+        env="RAW_WAZUH_TRAINING_PATH",
+    )
+    min_samples_per_attack_class: int = Field(50, env="MIN_SAMPLES_PER_ATTACK_CLASS")
 
     agent_service_url: Optional[str] = Field(None, env="AGENT_SERVICE_URL")
     agent_timeout_seconds: int = Field(10, env="AGENT_TIMEOUT_SECONDS")

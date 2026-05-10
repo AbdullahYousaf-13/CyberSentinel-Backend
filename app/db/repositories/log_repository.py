@@ -124,7 +124,10 @@ class LogRepository:
         query = {
             "ml_result.alert_type": "benign",
             "metadata.raw_wazuh_payload.decoder.name": "web-accesslog",
-            "metadata.engineered_features_78": {"$exists": True},
+            "$or": [
+                {"metadata.engineered_features_v1": {"$exists": True}},
+                {"metadata.engineered_features_78": {"$exists": True}},
+            ],
         }
         cursor = self._collection.find(query).sort("timestamp", -1).limit(limit)
         return await cursor.to_list(length=limit)

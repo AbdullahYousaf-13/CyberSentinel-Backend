@@ -29,12 +29,28 @@ class _FakeLogsRepo:
         return rows[:limit]
 
 
-def test_build_dataset_uses_feedback_sets_and_excludes_fp_from_attack_labels() -> None:
-    service = MLModelOpsService.__new__(MLModelOpsService)
-    service._logs = _FakeLogsRepo()
+class _FakeBuilder:
+    def build(self, raw_file_path: str, min_samples_per_class: int = 50):
+        assert raw_file_path.endswith(".json")
+        assert min_samples_per_class == 50
+        return {
+            "reason": "wazuh_bootstrap_retrain",
+            "features": [[1.0, 2.0], [0.1, 0.0]],
+            "labels": [1, 0],
+            "feature_names": ["f1", "f2"],
+            "feature_schema": "wazuh_native_v1",
+            "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN", "2": "OTHER_ATTACK"},
+            "report": {},
+        }
 
-    confirmed_known = [{"log_id": "k1", "classification": "PORTSCAN"}]
-    confirmed_known.extend({"log_id": f"missing-{idx}", "classification": "PORTSCAN"} for idx in range(199))
+
+def test_build_dataset_bootstrap_and_feedback_augmentation() -> None:
+    service = MLModelOpsService.__new__(MLModelOpsService)
+    service._settings = type("S", (), {"raw_wazuh_training_path": "C:/tmp/raw.json", "min_samples_per_attack_class": 50})()
+    service._logs = _FakeLogsRepo()
+    service._dataset_builder = _FakeBuilder()
+
+    confirmed_known = [{"log_id": "k1", "classification": "nmap_basic_scan"}]
 
     async def fake_fetch_feedback_sets():
         return {
@@ -44,10 +60,8 @@ def test_build_dataset_uses_feedback_sets_and_excludes_fp_from_attack_labels() -
 
     service._fetch_feedback_sets = fake_fetch_feedback_sets  # type: ignore[method-assign]
 
-    dataset = asyncio.run(service._build_dataset())
+    dataset = asyncio.run(MLModelOpsService._build_dataset(service))
 
     assert dataset["label_map"]["0"] == "BENIGN"
-    assert "PORTSCAN" in set(dataset["label_map"].values())
-    assert len(dataset["features"]) == 3
-    assert dataset["labels"].count(0) == 2
-    assert dataset["labels"].count(1) == 1
+    assert len(dataset["features"]) == 4
+    assert dataset["labels"].count(0) >= 2

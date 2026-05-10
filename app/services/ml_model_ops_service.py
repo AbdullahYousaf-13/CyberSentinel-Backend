@@ -7,6 +7,7 @@ import httpx
 from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
 from app.db.repositories.retrain_job_repository import RetrainJobRepository
+from app.ml.training.wazuh_dataset_builder import CLASS_ORDER, WazuhDatasetBuilder
 
 _job_lock = asyncio.Lock()
 _running_job_id: Optional[str] = None
@@ -17,6 +18,7 @@ class MLModelOpsService:
         self._settings = settings
         self._jobs = RetrainJobRepository()
         self._logs = LogRepository()
+        self._dataset_builder = WazuhDatasetBuilder()
 
     async def list_versions(self) -> List[Dict[str, Any]]:
         base_url = self._model_base_url()
@@ -103,59 +105,50 @@ class MLModelOpsService:
                     _running_job_id = None
 
     async def _build_dataset(self) -> Dict[str, Any]:
+        dataset = self._dataset_builder.build(
+            raw_file_path=self._settings.raw_wazuh_training_path,
+            min_samples_per_class=max(1, int(self._settings.min_samples_per_attack_class)),
+        )
         feedback_sets = await self._fetch_feedback_sets()
+        await self._augment_dataset_with_feedback(dataset, feedback_sets)
+        return dataset
+
+    async def _augment_dataset_with_feedback(self, dataset: Dict[str, Any], feedback_sets: Dict[str, Any]) -> None:
+        feature_names = dataset.get("feature_names") or []
+        if not feature_names:
+            return
+        features: List[List[float]] = dataset.get("features") or []
+        labels: List[int] = dataset.get("labels") or []
+        label_map_raw: Dict[str, str] = dataset.get("label_map") or {}
+        class_to_id = {v.lower(): int(k) for k, v in label_map_raw.items()}
+
         confirmed_known = feedback_sets["confirmed_known"]
         false_positive_ids = feedback_sets["false_positive_log_ids"]
-        confirmed_feedback_count = len(confirmed_known) + len(false_positive_ids)
-        if confirmed_feedback_count < 200:
-            raise RuntimeError("At least 200 confirmed feedback events are required before retraining")
-
         confirmed_logs = await self._logs.list_logs_by_ids([item["log_id"] for item in confirmed_known])
         false_positive_logs = await self._logs.list_logs_by_ids(list(false_positive_ids))
-        benign_logs = await self._logs.list_web_benign_logs(
-            limit=max(200, len(confirmed_logs) + len(false_positive_logs))
-        )
-
-        feature_names = self._feature_names_from_logs(confirmed_logs or false_positive_logs or benign_logs)
-        if not feature_names:
-            raise RuntimeError("No engineered feature schema found in logs")
-
-        label_to_id: Dict[str, int] = {"BENIGN": 0}
-        features: List[List[float]] = []
-        labels: List[int] = []
 
         promoted_by_id = {item["log_id"]: item["classification"] for item in confirmed_known}
         for log in confirmed_logs:
-            log_id = str(log.get("_id"))
-            cls = promoted_by_id.get(log_id)
-            if not cls:
-                continue
-            label_to_id.setdefault(cls, len(label_to_id))
             vec = self._vector_from_log(log, feature_names)
+            cls = self._normalize_feedback_class(promoted_by_id.get(str(log.get("_id")), "other_attack"))
+            label_id = class_to_id.get(cls, class_to_id.get("other_attack", class_to_id.get("benign", 0)))
             features.append(vec)
-            labels.append(label_to_id[cls])
+            labels.append(int(label_id))
 
-        # False-positive confirmed samples are explicitly safe to learn as benign.
+        benign_id = class_to_id.get("benign", 0)
         for log in false_positive_logs:
             vec = self._vector_from_log(log, feature_names)
             features.append(vec)
-            labels.append(0)
+            labels.append(int(benign_id))
 
-        suppressed_ids = {str(item.get("_id")) for item in false_positive_logs}
-        for log in benign_logs:
-            if str(log.get("_id")) in suppressed_ids:
-                continue
-            vec = self._vector_from_log(log, feature_names)
-            features.append(vec)
-            labels.append(0)
-
-        return {
-            "reason": "manual_ops_retrain",
-            "features": features,
-            "labels": labels,
-            "feature_names": feature_names,
-            "label_map": {str(v): k for k, v in label_to_id.items()},
+        dataset["features"] = features
+        dataset["labels"] = labels
+        report = dataset.get("report") or {}
+        report["feedback_augmented"] = {
+            "confirmed_known_used": len(confirmed_logs),
+            "false_positive_used": len(false_positive_logs),
         }
+        dataset["report"] = report
 
     async def _fetch_feedback_sets(self) -> Dict[str, Any]:
         rows = await self._logs.list_logs(limit=10000, offset=0, filters={"metadata.feedback.verdict": {"$exists": True}})
@@ -191,14 +184,16 @@ class MLModelOpsService:
     @staticmethod
     def _feature_names_from_logs(logs: List[Dict[str, Any]]) -> List[str]:
         for row in logs:
-            features = (row.get("metadata") or {}).get("engineered_features_78")
+            metadata = row.get("metadata") or {}
+            features = metadata.get("engineered_features_v1") or metadata.get("engineered_features_78")
             if isinstance(features, dict) and features:
                 return list(features.keys())
         return []
 
     @staticmethod
     def _vector_from_log(log: Dict[str, Any], feature_names: List[str]) -> List[float]:
-        features = (log.get("metadata") or {}).get("engineered_features_78")
+        metadata = (log.get("metadata") or {})
+        features = metadata.get("engineered_features_v1") or metadata.get("engineered_features_78")
         if not isinstance(features, dict):
             return [0.0 for _ in feature_names]
         out: List[float] = []
@@ -221,13 +216,40 @@ class MLModelOpsService:
         if len(set(labels)) < 2:
             raise RuntimeError("Training dataset must contain at least benign and one attack class")
 
+    @staticmethod
+    def _normalize_feedback_class(raw: str) -> str:
+        normalized = str(raw or "").strip().lower()
+        normalized = normalized.replace("known_attack_", "")
+        normalized = normalized.replace(" ", "_")
+        if normalized in CLASS_ORDER:
+            return normalized
+        return "other_attack"
+
     async def _train_remote(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
         base_url = self._model_base_url()
         headers = self._admin_headers()
         async with httpx.AsyncClient(timeout=180) as client:
             response = await client.post(f"{base_url}/train", json=dataset, headers=headers)
             response.raise_for_status()
-            return response.json()
+            body = response.json()
+            job_id = str(body.get("id") or "").strip()
+            if not job_id:
+                return body
+
+            for _ in range(240):
+                job_resp = await client.get(f"{base_url}/train/{job_id}", headers=headers)
+                job_resp.raise_for_status()
+                job = job_resp.json()
+                status = str(job.get("status") or "").lower()
+                if status in {"succeeded", "failed"}:
+                    if status == "failed":
+                        raise RuntimeError(str(job.get("error") or "Cloud retrain job failed"))
+                    result = job.get("result")
+                    if isinstance(result, dict):
+                        return result
+                    return {}
+                await asyncio.sleep(1)
+            raise RuntimeError("Cloud retrain job timed out")
 
     def _admin_headers(self) -> Dict[str, str]:
         token = (self._settings.model_admin_token or "").strip()
