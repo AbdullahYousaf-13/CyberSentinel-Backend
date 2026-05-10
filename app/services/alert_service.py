@@ -58,6 +58,25 @@ def _resolve_distribution_key(alert: Dict[str, Any]) -> str:
     return "uncategorized"
 
 
+def _derive_log_summary(log_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not log_doc:
+        return {}
+    network = log_doc.get("network") if isinstance(log_doc.get("network"), dict) else {}
+    return {
+        "event_id": str(log_doc.get("event_id") or log_doc.get("_id") or ""),
+        "event_time": log_doc.get("event_time") or log_doc.get("timestamp"),
+        "source_app": log_doc.get("source_app"),
+        "source_ip": log_doc.get("source_ip") or network.get("srcip"),
+        "destination_ip": log_doc.get("destination_ip") or network.get("dstip"),
+        "channel": log_doc.get("channel"),
+        "message": (log_doc.get("message_normalized") or log_doc.get("message") or "")[:240],
+        "event_origin": log_doc.get("event_origin"),
+        "decoder_name": log_doc.get("decoder_name"),
+        "agent_name": log_doc.get("agent_name"),
+        "network": network or None,
+    }
+
+
 def _ensure_utc_naive(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
@@ -155,6 +174,9 @@ class AlertService:
         classification: Optional[str] = None,
         anomaly_score: Optional[float] = None,
     ) -> str:
+        linked_log = await self._logs.get_by_id(log_id)
+        metadata_with_summary = dict(metadata or {})
+        metadata_with_summary["log_summary"] = _derive_log_summary(linked_log)
         # Alerts are derived artifacts and are never updated after creation.
         payload = {
             "created_at": datetime.utcnow(),
@@ -164,7 +186,7 @@ class AlertService:
             "classification": _normalize_classification(classification),
             "anomaly_score": anomaly_score,
             "model_version": model_version,
-            "metadata": metadata,
+            "metadata": metadata_with_summary,
         }
         alert_id = await self._alerts.create_alert(payload)
         await manager.broadcast({"event": "alert_created", "alert_id": alert_id, "severity": severity})
@@ -183,6 +205,9 @@ class AlertService:
         classification: Optional[str] = None,
         anomaly_score: Optional[float] = None,
     ) -> str:
+        linked_log = await self._logs.get_by_id(log_id)
+        metadata_with_summary = dict(metadata or {})
+        metadata_with_summary["log_summary"] = _derive_log_summary(linked_log)
         payload = {
             "created_at": datetime.utcnow(),
             "log_id": log_id,
@@ -191,7 +216,7 @@ class AlertService:
             "classification": _normalize_classification(classification),
             "anomaly_score": anomaly_score,
             "model_version": model_version,
-            "metadata": metadata,
+            "metadata": metadata_with_summary,
         }
         alert_id, created = await self._alerts.create_or_get_alert(payload)
         if created:
@@ -347,32 +372,23 @@ class AlertService:
         }
 
     async def get_alert_analytics(self) -> Dict[str, Any]:
-        alert_rows = await self._alerts.list_alerts_for_analytics()
-        total_alerts = len(alert_rows)
+        total_alerts = await self._alerts.count_alerts()
         if total_alerts == 0:
             return {
+                "severity_counts": {"total": 0, "high": 0, "medium": 0, "low": 0},
                 "trend": {"unit": "day", "points": []},
                 "distribution": [],
                 "total_alerts": 0,
                 "first_alert_at": None,
                 "last_alert_at": None,
+                "window": {"start": None, "end": None, "bucket_unit": "day"},
             }
 
-        distribution_counts: Dict[str, int] = {}
-        created_at_values: list[datetime] = []
-        for row in alert_rows:
-            key = _resolve_distribution_key(row)
-            distribution_counts[key] = distribution_counts.get(key, 0) + 1
-
-            created_at = row.get("created_at")
-            if isinstance(created_at, datetime):
-                created_at_values.append(_ensure_utc_naive(created_at))
-
+        distribution_rows = await self._alerts.aggregate_distribution()
         distribution = []
-        for key, count in sorted(
-            distribution_counts.items(),
-            key=lambda item: (-item[1], item[0]),
-        ):
+        for row in distribution_rows:
+            key = row["key"]
+            count = row["count"]
             distribution.append(
                 {
                     "key": key,
@@ -382,46 +398,51 @@ class AlertService:
                 }
             )
 
-        if not created_at_values:
+        span_bounds = await self._alerts.min_max_created_at()
+        first_raw = span_bounds.get("min_created_at")
+        last_raw = span_bounds.get("max_created_at")
+        first_alert_at = _ensure_utc_naive(first_raw) if isinstance(first_raw, datetime) else None
+        last_alert_at = _ensure_utc_naive(last_raw) if isinstance(last_raw, datetime) else None
+
+        if not first_alert_at or not last_alert_at:
+            severity_counts = await self._alerts.aggregate_severity_counts()
             return {
+                "severity_counts": severity_counts,
                 "trend": {"unit": "day", "points": []},
                 "distribution": distribution,
                 "total_alerts": total_alerts,
                 "first_alert_at": None,
                 "last_alert_at": None,
+                "window": {"start": None, "end": None, "bucket_unit": "day"},
             }
 
-        first_alert_at = min(created_at_values)
-        last_alert_at = max(created_at_values)
         now_utc = datetime.utcnow()
         span_end = max(now_utc, last_alert_at)
         unit = _select_trend_unit(span_end - first_alert_at)
-
-        bucket_counts: Dict[datetime, int] = {}
-        for created_at in created_at_values:
-            bucket_start = _truncate_bucket(created_at, unit)
-            bucket_counts[bucket_start] = bucket_counts.get(bucket_start, 0) + 1
-
+        trend_rows = await self._alerts.aggregate_trend(unit=unit, start=first_alert_at, end=span_end)
         points: list[Dict[str, Any]] = []
-        cursor = _truncate_bucket(first_alert_at, unit)
-        end_bucket = _truncate_bucket(span_end, unit)
-        while cursor <= end_bucket:
-            next_start = _next_bucket_start(cursor, unit)
+        for row in trend_rows:
+            bucket_start = row.get("bucket_start")
+            if not isinstance(bucket_start, datetime):
+                continue
+            bucket_start = _ensure_utc_naive(bucket_start)
+            bucket_end = _next_bucket_start(bucket_start, unit)
             points.append(
                 {
-                    "bucket_start": cursor,
-                    "bucket_end": next_start,
-                    "label": _format_bucket_label(cursor, unit),
-                    "count": bucket_counts.get(cursor, 0),
+                    "bucket_start": bucket_start,
+                    "bucket_end": bucket_end,
+                    "label": _format_bucket_label(bucket_start, unit),
+                    "count": int(row.get("count") or 0),
                 }
             )
-            cursor = next_start
-
-        points = _merge_trend_points(points, ANALYTICS_TARGET_BUCKETS)
+        points = _merge_trend_points(points, ANALYTICS_TARGET_BUCKETS) if points else []
+        severity_counts = await self._alerts.aggregate_severity_counts()
         return {
+            "severity_counts": severity_counts,
             "trend": {"unit": unit, "points": points},
             "distribution": distribution,
             "total_alerts": total_alerts,
             "first_alert_at": first_alert_at,
             "last_alert_at": last_alert_at,
+            "window": {"start": first_alert_at, "end": span_end, "bucket_unit": unit},
         }

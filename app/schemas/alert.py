@@ -35,12 +35,27 @@ class AlertDistributionPointResponse(BaseModel):
     percentage: float
 
 
+class AlertSeverityCountsResponse(BaseModel):
+    total: int
+    high: int
+    medium: int
+    low: int
+
+
+class AlertAnalyticsWindowResponse(BaseModel):
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+    bucket_unit: str
+
+
 class AlertAnalyticsResponse(BaseModel):
+    severity_counts: AlertSeverityCountsResponse
     trend: AlertTrendResponse
     distribution: list[AlertDistributionPointResponse]
     total_alerts: int
     first_alert_at: Optional[datetime] = None
     last_alert_at: Optional[datetime] = None
+    window: AlertAnalyticsWindowResponse
 
 
 class ConfirmKnownAttackRequest(BaseModel):

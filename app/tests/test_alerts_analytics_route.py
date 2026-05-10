@@ -16,11 +16,13 @@ def test_get_alert_analytics_route_returns_empty_shape(monkeypatch) -> None:
     class _FakeAlertService:
         async def get_alert_analytics(self):
             return {
+                "severity_counts": {"total": 0, "high": 0, "medium": 0, "low": 0},
                 "trend": {"unit": "day", "points": []},
                 "distribution": [],
                 "total_alerts": 0,
                 "first_alert_at": None,
                 "last_alert_at": None,
+                "window": {"start": None, "end": None, "bucket_unit": "day"},
             }
 
     monkeypatch.setattr(alerts_route, "AlertService", _FakeAlertService)
@@ -47,6 +49,7 @@ def test_get_alert_analytics_route_keeps_dynamic_distribution_types(monkeypatch)
                         }
                     ],
                 },
+                "severity_counts": {"total": 3, "high": 2, "medium": 1, "low": 0},
                 "distribution": [
                     {"key": "quantum_probe", "label": "Quantum Probe", "count": 2, "percentage": 66.67},
                     {"key": "ssh_brute", "label": "Ssh Brute", "count": 1, "percentage": 33.33},
@@ -54,6 +57,11 @@ def test_get_alert_analytics_route_keeps_dynamic_distribution_types(monkeypatch)
                 "total_alerts": 3,
                 "first_alert_at": datetime(2026, 1, 1, 0, 0, 0),
                 "last_alert_at": datetime(2026, 1, 7, 23, 0, 0),
+                "window": {
+                    "start": datetime(2026, 1, 1, 0, 0, 0),
+                    "end": datetime(2026, 1, 7, 23, 0, 0),
+                    "bucket_unit": "week",
+                },
             }
 
     monkeypatch.setattr(alerts_route, "AlertService", _FakeAlertService)

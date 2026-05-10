@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 from app.services.alert_service import (
     AlertService,
+    _derive_log_summary,
     _merge_trend_points,
     _normalize_classification,
     _resolve_distribution_key,
@@ -14,8 +15,55 @@ class _FakeAlertRepository:
     def __init__(self, rows):
         self._rows = rows
 
-    async def list_alerts_for_analytics(self):
-        return self._rows
+    async def count_alerts(self):
+        return len(self._rows)
+
+    async def aggregate_distribution(self):
+        counts = {}
+        for row in self._rows:
+            key = _resolve_distribution_key(row)
+            counts[key] = counts.get(key, 0) + 1
+        return [{"key": key, "count": count} for key, count in counts.items()]
+
+    async def min_max_created_at(self):
+        created = [row.get("created_at") for row in self._rows if isinstance(row.get("created_at"), datetime)]
+        if not created:
+            return {"min_created_at": None, "max_created_at": None}
+        return {"min_created_at": min(created), "max_created_at": max(created)}
+
+    async def aggregate_trend(self, unit, start, end):
+        buckets = {}
+        for row in self._rows:
+            dt = row.get("created_at")
+            if not isinstance(dt, datetime):
+                continue
+            if unit == "hour":
+                key_dt = dt.replace(minute=0, second=0, microsecond=0)
+            elif unit == "day":
+                key_dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif unit == "week":
+                day = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                key_dt = day - timedelta(days=day.weekday())
+            else:
+                key_dt = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            buckets[key_dt] = buckets.get(key_dt, 0) + 1
+        return [
+            {"bucket_start": bucket_start, "count": count, "label": str(bucket_start)}
+            for bucket_start, count in sorted(buckets.items(), key=lambda item: item[0])
+        ]
+
+    async def aggregate_severity_counts(self):
+        counts = {"total": 0, "high": 0, "medium": 0, "low": 0}
+        for row in self._rows:
+            counts["total"] += 1
+            severity = str(row.get("severity") or "").lower()
+            if severity in {"high", "critical"}:
+                counts["high"] += 1
+            elif severity == "medium":
+                counts["medium"] += 1
+            else:
+                counts["low"] += 1
+        return counts
 
 
 def _build_service(rows):
@@ -64,11 +112,28 @@ def test_normalize_classification_keeps_model_label_only() -> None:
     assert _normalize_classification(None) is None
 
 
+def test_derive_log_summary_extracts_stable_fields() -> None:
+    log_doc = {
+        "_id": "id1",
+        "event_id": "ev-1",
+        "timestamp": datetime(2026, 1, 1, 10, 0, 0),
+        "source_app": "System",
+        "network": {"srcip": "1.1.1.1", "dstip": "2.2.2.2"},
+        "message": "hello",
+    }
+    summary = _derive_log_summary(log_doc)
+    assert summary["event_id"] == "ev-1"
+    assert summary["source_ip"] == "1.1.1.1"
+    assert summary["destination_ip"] == "2.2.2.2"
+    assert summary["message"] == "hello"
+
+
 def test_get_alert_analytics_returns_empty_payload_for_no_alerts() -> None:
     service = _build_service([])
     payload = asyncio.run(service.get_alert_analytics())
 
     assert payload["total_alerts"] == 0
+    assert payload["severity_counts"] == {"total": 0, "high": 0, "medium": 0, "low": 0}
     assert payload["trend"]["points"] == []
     assert payload["distribution"] == []
     assert payload["first_alert_at"] is None
@@ -78,9 +143,9 @@ def test_get_alert_analytics_returns_empty_payload_for_no_alerts() -> None:
 def test_get_alert_analytics_short_span_uses_hour_buckets() -> None:
     now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     rows = [
-        {"created_at": now - timedelta(hours=20), "classification": "SSH_BRUTE"},
-        {"created_at": now - timedelta(hours=5), "alert_type": "credential_attack"},
-        {"created_at": now - timedelta(hours=1), "classification": "N/A", "alert_type": "new_signal"},
+        {"created_at": now - timedelta(hours=20), "classification": "SSH_BRUTE", "severity": "high"},
+        {"created_at": now - timedelta(hours=5), "alert_type": "credential_attack", "severity": "medium"},
+        {"created_at": now - timedelta(hours=1), "classification": "N/A", "alert_type": "new_signal", "severity": "low"},
     ]
     service = _build_service(rows)
     payload = asyncio.run(service.get_alert_analytics())
@@ -92,6 +157,7 @@ def test_get_alert_analytics_short_span_uses_hour_buckets() -> None:
     assert "ssh_brute" in keys
     assert "credential_attack" in keys
     assert "new_signal" in keys
+    assert payload["severity_counts"] == {"total": 3, "high": 1, "medium": 1, "low": 1}
 
 
 def test_get_alert_analytics_long_span_uses_month_and_merges_to_12() -> None:
@@ -104,6 +170,7 @@ def test_get_alert_analytics_long_span_uses_month_and_merges_to_12() -> None:
             {
                 "created_at": datetime(year, month, 15, 12, 0, 0),
                 "classification": "Advanced_Persistent_Threat",
+                "severity": "critical",
             }
         )
     service = _build_service(rows)

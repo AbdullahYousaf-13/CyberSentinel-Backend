@@ -43,7 +43,10 @@ async def list_alerts(
     service = AlertService()
     filters = {}
     if severity:
-        filters["severity"] = severity
+        if severity.lower() == "high":
+            filters["severity"] = {"$in": ["high", "critical"]}
+        else:
+            filters["severity"] = severity
     if alert_type:
         filters["alert_type"] = alert_type
     if start_ts or end_ts:
