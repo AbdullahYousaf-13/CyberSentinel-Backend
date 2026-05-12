@@ -6,6 +6,7 @@ from app.core.config import get_settings
 from app.db.repositories.log_repository import LogRepository
 from app.core.websocket import manager
 from app.db.repositories.alert_repository import AlertRepository
+from app.services.log_context_service import build_normalized_log_context
 from app.services.ml_promotion_service import MLPromotionService
 from app.services.ml_suppression_service import MLSuppressionService
 from app.services.notification_service import NotificationService
@@ -65,19 +66,19 @@ def _resolve_distribution_key(alert: Dict[str, Any]) -> str:
 def _derive_log_summary(log_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not log_doc:
         return {}
-    network = log_doc.get("network") if isinstance(log_doc.get("network"), dict) else {}
+    context = build_normalized_log_context(log_doc)
     return {
-        "event_id": str(log_doc.get("event_id") or log_doc.get("_id") or ""),
-        "event_time": log_doc.get("event_time") or log_doc.get("timestamp"),
-        "source_app": log_doc.get("source_app"),
-        "source_ip": log_doc.get("source_ip") or network.get("srcip"),
-        "destination_ip": log_doc.get("destination_ip") or network.get("dstip"),
-        "channel": log_doc.get("channel"),
-        "message": (log_doc.get("message_normalized") or log_doc.get("message") or "")[:240],
-        "event_origin": log_doc.get("event_origin"),
-        "decoder_name": log_doc.get("decoder_name"),
-        "agent_name": log_doc.get("agent_name"),
-        "network": network or None,
+        "event_id": str(context.get("event_id") or log_doc.get("_id") or ""),
+        "event_time": context.get("event_time") or log_doc.get("timestamp"),
+        "source_app": context.get("source_app"),
+        "source_ip": context.get("source_ip"),
+        "destination_ip": context.get("destination_ip"),
+        "channel": context.get("channel"),
+        "message": str(context.get("message_normalized") or log_doc.get("message") or "")[:240],
+        "event_origin": context.get("event_origin"),
+        "decoder_name": context.get("decoder_name"),
+        "agent_name": context.get("agent_name"),
+        "network": context.get("network"),
     }
 
 
@@ -383,9 +384,9 @@ class AlertService:
     def _extract_ips(linked_log: Optional[Dict[str, Any]]) -> tuple[str, str]:
         if not isinstance(linked_log, dict):
             return (MISSING_IP_SENTINEL, MISSING_IP_SENTINEL)
-        network = linked_log.get("network") if isinstance(linked_log.get("network"), dict) else {}
-        src = str(linked_log.get("source_ip") or network.get("srcip") or "").strip() or MISSING_IP_SENTINEL
-        dst = str(linked_log.get("destination_ip") or network.get("dstip") or "").strip() or MISSING_IP_SENTINEL
+        context = build_normalized_log_context(linked_log)
+        src = str(context.get("source_ip") or "").strip() or MISSING_IP_SENTINEL
+        dst = str(context.get("destination_ip") or "").strip() or MISSING_IP_SENTINEL
         return (src, dst)
 
     @staticmethod

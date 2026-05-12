@@ -89,6 +89,37 @@ def extract_network_context(payload: Dict[str, Any]) -> Optional[Dict[str, Optio
     }
 
 
+def _derive_source_value(payload: Dict[str, Any], log_doc: Dict[str, Any]) -> Optional[str]:
+    data = _as_dict(payload.get("data"))
+    agent = _as_dict(payload.get("agent"))
+    return _first_non_empty(
+        data.get("srcip"),
+        payload.get("srcip"),
+        agent.get("name"),
+        data.get("srcuser"),
+        payload.get("location"),
+        log_doc.get("source"),
+    )
+
+
+def _derive_destination_value(payload: Dict[str, Any], log_doc: Dict[str, Any]) -> Optional[str]:
+    data = _as_dict(payload.get("data"))
+    agent = _as_dict(payload.get("agent"))
+    dst = _first_non_empty(
+        data.get("dstip"),
+        payload.get("dstip"),
+        data.get("dstuser"),
+        data.get("hostname"),
+    )
+    if dst:
+        return dst
+
+    network = extract_network_context(payload)
+    if not network:
+        return _as_str(agent.get("name"))
+    return None
+
+
 def build_normalized_log_context(log_doc: Dict[str, Any]) -> Dict[str, Any]:
     payload = get_raw_wazuh_payload(log_doc)
     decoder = _as_dict(payload.get("decoder"))
@@ -106,8 +137,8 @@ def build_normalized_log_context(log_doc: Dict[str, Any]) -> Dict[str, Any]:
     event_origin = _first_non_empty(payload.get("location"), decoder_name, log_doc.get("source"))
     network = extract_network_context(payload)
     source_app = classify_source_app(payload, log_doc)
-    source_ip = _as_str((network or {}).get("srcip"))
-    destination_ip = _as_str((network or {}).get("dstip"))
+    source_ip = _derive_source_value(payload, log_doc)
+    destination_ip = _derive_destination_value(payload, log_doc)
     channel = classify_channel(network, decoder_name)
 
     return {
