@@ -36,6 +36,7 @@ class Settings(BaseSettings):
         env="RAW_WAZUH_TRAINING_PATH",
     )
     min_samples_per_attack_class: int = Field(50, env="MIN_SAMPLES_PER_ATTACK_CLASS")
+    raw_wazuh_worker_concurrency: int = Field(4, env="RAW_WAZUH_WORKER_CONCURRENCY")
 
     agent_service_url: Optional[str] = Field(None, env="AGENT_SERVICE_URL")
     agent_timeout_seconds: int = Field(10, env="AGENT_TIMEOUT_SECONDS")

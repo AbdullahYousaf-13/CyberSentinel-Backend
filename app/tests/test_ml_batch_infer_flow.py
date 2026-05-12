@@ -177,6 +177,7 @@ def test_run_batch_inference_creates_alert_for_non_benign() -> None:
     assert len(fake_alerts.calls) == 1
     assert fake_alerts.calls[0]["log_id"] == "log-3"
     assert fake_alerts.calls[0]["metadata"]["message"] == ""
+    assert fake_alerts.calls[0]["severity"] == "high"
 
 
 def test_batch_infer_rejects_parallel_runs_with_409(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,6 +275,47 @@ def test_map_cloud_prediction_unknown_attack_normalized_to_anomaly() -> None:
     assert result["if_used"] is True
 
 
+def test_map_cloud_prediction_uses_structured_scores_when_available() -> None:
+    service = MLService.__new__(MLService)
+    service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
+
+    anomaly = service._map_cloud_prediction(
+        "ANOMALY",
+        {"if_anomaly_score": 0.81, "rf_max_proba": 0.73},
+    )
+    known = service._map_cloud_prediction(
+        "KNOWN_ATTACK_SSH_BRUTE",
+        {"rf_max_proba": 0.88},
+    )
+
+    assert anomaly["score"] == 0.81
+    assert anomaly["if_anomaly_score"] == 0.81
+    assert anomaly["rf_max_proba"] == 0.73
+    assert known["score"] == 0.88
+    assert known["rf_max_proba"] == 0.88
+
+
+def test_extract_prediction_payload_supports_nested_prediction_object() -> None:
+    service = MLService.__new__(MLService)
+    body = {
+        "prediction": {
+            "prediction": "ANOMALY",
+            "rf_max_proba": 0.67,
+            "if_anomaly_score": 0.79,
+            "if_pred": -1,
+            "rf_pred": 0,
+        },
+        "model_version": "v-test-1",
+    }
+
+    payload = service._extract_prediction_payload(body)
+
+    assert payload["prediction"] == "ANOMALY"
+    assert payload["model_version"] == "v-test-1"
+    assert payload["rf_max_proba"] == 0.67
+    assert payload["if_anomaly_score"] == 0.79
+
+
 def test_get_skip_reason_only_skips_non_web_wazuh_decoders() -> None:
     service = MLService.__new__(MLService)
     service._settings = SimpleNamespace(anomaly_score_threshold=0.65)
@@ -318,3 +360,12 @@ def test_run_batch_inference_skips_suppressed_logs() -> None:
     assert fake_logs.skipped_calls == [("log-s1", "suppressed_false_positive", "cloud-api")]
     assert fake_logs.done_calls == []
     assert fake_logs.error_calls == []
+
+
+def test_derive_alert_severity_uses_score_bands() -> None:
+    assert MLService.derive_alert_severity({"alert_type": "known_attack", "score": 0.91}) == "high"
+    assert MLService.derive_alert_severity({"alert_type": "known_attack", "score": 0.74}) == "medium"
+    assert MLService.derive_alert_severity({"alert_type": "known_attack", "score": 0.61}) == "low"
+    assert MLService.derive_alert_severity({"alert_type": "anomaly", "score": 0.88}) == "high"
+    assert MLService.derive_alert_severity({"alert_type": "anomaly", "score": 0.73}) == "medium"
+    assert MLService.derive_alert_severity({"alert_type": "anomaly", "score": 0.66}) == "low"

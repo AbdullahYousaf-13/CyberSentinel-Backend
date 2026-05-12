@@ -71,7 +71,7 @@ class MLService:
             if result["alert_type"] == "benign":
                 continue
 
-            severity = "high" if result["alert_type"] == "known_attack" else "medium"
+            severity = self.derive_alert_severity(result)
             await self._alerts.create_or_get_alert(
                 log_id=str(log_id),
                 alert_type=result["alert_type"],
@@ -86,6 +86,28 @@ class MLService:
             )
             alerts_created += 1
         return {"processed": processed_count, "alerts": alerts_created}
+
+    @staticmethod
+    def derive_alert_severity(result: Dict[str, Any]) -> str:
+        alert_type = str(result.get("alert_type") or "").strip().lower()
+        score_raw = result.get("score")
+        score = float(score_raw) if isinstance(score_raw, (int, float)) else 0.0
+
+        if alert_type == "known_attack":
+            if score >= 0.85:
+                return "high"
+            if score >= 0.70:
+                return "medium"
+            return "low"
+
+        if alert_type == "anomaly":
+            if score >= 0.85:
+                return "high"
+            if score >= 0.70:
+                return "medium"
+            return "low"
+
+        return "low"
 
     async def infer_logs(self, logs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
         features = self._feature_extractor.transform(logs)
@@ -194,7 +216,7 @@ class MLService:
                 model_version = prediction_payload.get("model_version")
                 if model_version:
                     resolved_model_version = model_version
-                mapped = self._map_cloud_prediction(prediction)
+                mapped = self._map_cloud_prediction(prediction, prediction_payload)
                 if model_version:
                     mapped["model_version"] = model_version
                 results.append(mapped)
@@ -265,6 +287,7 @@ class MLService:
     def _extract_prediction_payload(body: Any) -> Dict[str, Any]:
         prediction = ""
         model_version = None
+        details: Dict[str, Any] = {}
         if isinstance(body, dict):
             raw_version = body.get("model_version", body.get("version"))
             if isinstance(raw_version, str) and raw_version.strip():
@@ -277,6 +300,12 @@ class MLService:
                 if isinstance(value, (int, float)) and prediction == "":
                     prediction = str(value)
                     break
+                if isinstance(value, dict):
+                    nested_prediction = value.get("prediction")
+                    if isinstance(nested_prediction, str) and nested_prediction.strip():
+                        prediction = nested_prediction.strip()
+                        details = value
+                        break
                 if isinstance(value, list) and value:
                     first = value[0]
                     if isinstance(first, str):
@@ -291,11 +320,25 @@ class MLService:
                 prediction = first.strip()
             elif isinstance(first, (int, float)):
                 prediction = str(first)
-        return {"prediction": prediction, "model_version": model_version}
+        if isinstance(body, dict) and not details:
+            for key in ("rf_pred", "rf_max_proba", "if_pred", "if_anomaly_score"):
+                if key in body:
+                    details[key] = body.get(key)
+        return {"prediction": prediction, "model_version": model_version, **details}
 
-    def _map_cloud_prediction(self, prediction: str) -> Dict[str, Any]:
+    def _map_cloud_prediction(self, prediction: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        payload = payload or {}
         raw_prediction = str(prediction or "").strip()
         normalized = raw_prediction.upper()
+        rf_max_proba_raw = payload.get("rf_max_proba")
+        if_anomaly_score_raw = payload.get("if_anomaly_score")
+        rf_max_proba = (
+            float(rf_max_proba_raw) if isinstance(rf_max_proba_raw, (int, float)) else None
+        )
+        if_anomaly_score = (
+            float(if_anomaly_score_raw) if isinstance(if_anomaly_score_raw, (int, float)) else None
+        )
+
         if normalized == "BENIGN":
             return {
                 "alert_type": "benign",
@@ -304,15 +347,23 @@ class MLService:
                 "rf_label": "0",
                 "if_used": True,
                 "raw_prediction": raw_prediction,
+                "rf_max_proba": rf_max_proba,
+                "if_anomaly_score": if_anomaly_score,
             }
         if normalized in {"UNKNOWN_ATTACK", "ANOMALY"}:
             return {
                 "alert_type": "anomaly",
                 "classification": None,
-                "score": self._settings.anomaly_score_threshold,
+                "score": (
+                    if_anomaly_score
+                    if if_anomaly_score is not None
+                    else self._settings.anomaly_score_threshold
+                ),
                 "rf_label": "0",
                 "if_used": True,
                 "raw_prediction": "ANOMALY",
+                "rf_max_proba": rf_max_proba,
+                "if_anomaly_score": if_anomaly_score,
             }
         prefix = "KNOWN_ATTACK_"
         if normalized.startswith(prefix):
@@ -321,19 +372,27 @@ class MLService:
             return {
                 "alert_type": "known_attack",
                 "classification": classification,
-                "score": 1.0,
+                "score": rf_max_proba if rf_max_proba is not None else 1.0,
                 "rf_label": rf_label,
                 "if_used": False,
                 "raw_prediction": raw_prediction,
+                "rf_max_proba": rf_max_proba,
+                "if_anomaly_score": if_anomaly_score,
             }
         logger.warning("Unexpected cloud prediction '%s'; treating as anomaly", prediction)
         return {
             "alert_type": "anomaly",
             "classification": None,
-            "score": self._settings.anomaly_score_threshold,
+            "score": (
+                if_anomaly_score
+                if if_anomaly_score is not None
+                else self._settings.anomaly_score_threshold
+            ),
             "rf_label": "0",
             "if_used": True,
             "raw_prediction": raw_prediction,
+            "rf_max_proba": rf_max_proba,
+            "if_anomaly_score": if_anomaly_score,
         }
 
     def get_skip_reason(self, log: Dict[str, Any]) -> str | None:

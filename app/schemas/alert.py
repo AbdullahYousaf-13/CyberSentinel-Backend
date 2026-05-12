@@ -6,14 +6,22 @@ from pydantic import BaseModel
 
 class AlertResponse(BaseModel):
     id: str
+    incident_id: str
     created_at: datetime
-    log_id: str
+    opened_at: datetime
+    last_seen_at: datetime
+    closed_at: Optional[datetime] = None
+    status: str
+    event_count: int
+    log_ids: list[str]
     alert_type: str
     severity: str
+    source_ip: str
+    destination_ip: str
     classification: Optional[str] = None
-    anomaly_score: Optional[float] = None
-    model_version: str
+    model_versions_seen: list[str]
     metadata: Dict[str, Any]
+    children: list[Dict[str, Any]] = []
 
 
 class AlertTrendPointResponse(BaseModel):

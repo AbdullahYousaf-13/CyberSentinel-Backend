@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
@@ -11,19 +11,92 @@ class AlertRepository:
     def __init__(self) -> None:
         self._collection = get_db().get_collection("alerts")
 
-    async def create_alert(self, payload: Dict[str, Any]) -> str:
-        result = await self._collection.insert_one(payload)
-        return str(result.inserted_id)
+    async def create_or_update_incident(
+        self,
+        *,
+        correlation_key: str,
+        alert_type: str,
+        classification: Optional[str],
+        source_ip: str,
+        destination_ip: str,
+        log_id: str,
+        severity: str,
+        model_version: str,
+        anomaly_score: Optional[float],
+        metadata: Dict[str, Any],
+        event_time: datetime,
+        inactivity_minutes: int,
+    ) -> tuple[str, bool]:
+        open_threshold = event_time - timedelta(minutes=max(1, inactivity_minutes))
+        query = {
+            "correlation_key": correlation_key,
+            "status": "open",
+            "last_seen_at": {"$gte": open_threshold},
+        }
+        incident_event = {
+            "log_id": log_id,
+            "event_time": event_time,
+            "severity": severity,
+            "model_version": model_version,
+            "anomaly_score": anomaly_score,
+            "metadata": metadata or {},
+        }
+        existing = await self._collection.find_one(query, {"_id": 1, "severity": 1})
+        if existing:
+            resolved_severity = self._max_severity(
+                str(existing.get("severity") or "low"),
+                severity,
+            )
+            await self._collection.update_one(
+                {"_id": existing["_id"]},
+                {
+                    "$set": {
+                        "status": "open",
+                        "last_seen_at": event_time,
+                        "updated_at": datetime.utcnow(),
+                        "severity": resolved_severity,
+                    },
+                    "$inc": {"event_count": 1},
+                    "$addToSet": {
+                        "log_ids": log_id,
+                        "model_versions_seen": model_version,
+                    },
+                    "$push": {"children": incident_event},
+                },
+            )
+            return str(existing["_id"]), False
 
-    async def create_or_get_alert(self, payload: Dict[str, Any]) -> tuple[str, bool]:
-        query = {"log_id": payload["log_id"]}
-        result = await self._collection.update_one(query, {"$setOnInsert": payload}, upsert=True)
-        if result.upserted_id is not None:
-            return str(result.upserted_id), True
-        existing = await self._collection.find_one(query, {"_id": 1})
-        if not existing:
-            raise RuntimeError("Alert upsert failed")
-        return str(existing["_id"]), False
+        payload = {
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "opened_at": event_time,
+            "last_seen_at": event_time,
+            "closed_at": None,
+            "status": "open",
+            "correlation_key": correlation_key,
+            "incident_id": None,
+            "event_count": 1,
+            "log_ids": [log_id],
+            "children": [incident_event],
+            "alert_type": alert_type,
+            "classification": classification,
+            "source_ip": source_ip,
+            "destination_ip": destination_ip,
+            "severity": severity,
+            "model_versions_seen": [model_version],
+            "metadata": metadata or {},
+        }
+        result = await self._collection.insert_one(payload)
+        incident_id = str(result.inserted_id)
+        await self._collection.update_one({"_id": result.inserted_id}, {"$set": {"incident_id": incident_id}})
+        return incident_id, True
+
+    @staticmethod
+    def _max_severity(current: str, incoming: str) -> str:
+        rank_map = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+        cur = rank_map.get(str(current or "").lower(), 1)
+        new = rank_map.get(str(incoming or "").lower(), 1)
+        return current if cur >= new else incoming
 
     async def list_alerts(
         self,
@@ -47,7 +120,7 @@ class AlertRepository:
         await self._collection.update_one({"_id": ObjectId(alert_id)}, {"$set": updates})
 
     async def get_alert_by_log_id(self, log_id: str) -> Optional[Dict[str, Any]]:
-        return await self._collection.find_one({"log_id": log_id})
+        return await self._collection.find_one({"log_ids": log_id})
 
     async def list_alerts_for_digest(
         self,

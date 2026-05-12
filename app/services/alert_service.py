@@ -13,6 +13,9 @@ from app.services.notification_service import NotificationService
 ANALYTICS_TARGET_BUCKETS = 12
 _PLACEHOLDER_LABELS = {"n/a", "na", "none", "null", "undefined", "unknown_attack"}
 _NUMERIC_ONLY_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
+ANOMALY_CLASSIFICATION_SENTINEL = "__anomaly__"
+MISSING_IP_SENTINEL = "__missing_ip__"
+INCIDENT_INACTIVITY_MINUTES = 10
 
 
 def _normalize_classification(classification: Optional[str]) -> Optional[str]:
@@ -164,37 +167,6 @@ class AlertService:
         self._suppressions = MLSuppressionService()
         self._notifications = NotificationService(get_settings())
 
-    async def create_alert(
-        self,
-        log_id: str,
-        alert_type: str,
-        severity: str,
-        model_version: str,
-        metadata: Dict[str, Any],
-        classification: Optional[str] = None,
-        anomaly_score: Optional[float] = None,
-    ) -> str:
-        linked_log = await self._logs.get_by_id(log_id)
-        metadata_with_summary = dict(metadata or {})
-        metadata_with_summary["log_summary"] = _derive_log_summary(linked_log)
-        # Alerts are derived artifacts and are never updated after creation.
-        payload = {
-            "created_at": datetime.utcnow(),
-            "log_id": log_id,
-            "alert_type": alert_type,
-            "severity": severity,
-            "classification": _normalize_classification(classification),
-            "anomaly_score": anomaly_score,
-            "model_version": model_version,
-            "metadata": metadata_with_summary,
-        }
-        alert_id = await self._alerts.create_alert(payload)
-        await manager.broadcast({"event": "alert_created", "alert_id": alert_id, "severity": severity})
-        alert = await self._alerts.get_alert(alert_id)
-        if alert:
-            await self._notifications.send_immediate_for_alert(alert)
-        return alert_id
-
     async def create_or_get_alert(
         self,
         log_id: str,
@@ -208,17 +180,36 @@ class AlertService:
         linked_log = await self._logs.get_by_id(log_id)
         metadata_with_summary = dict(metadata or {})
         metadata_with_summary["log_summary"] = _derive_log_summary(linked_log)
-        payload = {
-            "created_at": datetime.utcnow(),
-            "log_id": log_id,
-            "alert_type": alert_type,
-            "severity": severity,
-            "classification": _normalize_classification(classification),
-            "anomaly_score": anomaly_score,
-            "model_version": model_version,
-            "metadata": metadata_with_summary,
-        }
-        alert_id, created = await self._alerts.create_or_get_alert(payload)
+        normalized_classification = _normalize_classification(classification)
+        correlation_classification = normalized_classification
+        if alert_type == "anomaly" and not correlation_classification:
+            correlation_classification = ANOMALY_CLASSIFICATION_SENTINEL
+        src_ip, dst_ip = self._extract_ips(linked_log)
+        correlation_key = self._build_correlation_key(
+            alert_type=alert_type,
+            classification=correlation_classification or "",
+            source_ip=src_ip,
+            destination_ip=dst_ip,
+        )
+        event_time = datetime.utcnow()
+        if linked_log:
+            raw_time = linked_log.get("event_time") or linked_log.get("timestamp")
+            if isinstance(raw_time, datetime):
+                event_time = raw_time
+        alert_id, created = await self._alerts.create_or_update_incident(
+            correlation_key=correlation_key,
+            alert_type=alert_type,
+            classification=normalized_classification,
+            source_ip=src_ip,
+            destination_ip=dst_ip,
+            log_id=log_id,
+            severity=severity,
+            model_version=model_version,
+            anomaly_score=anomaly_score,
+            metadata=metadata_with_summary,
+            event_time=event_time,
+            inactivity_minutes=INCIDENT_INACTIVITY_MINUTES,
+        )
         if created:
             await manager.broadcast({"event": "alert_created", "alert_id": alert_id, "severity": severity})
             alert = await self._alerts.get_alert(alert_id)
@@ -248,7 +239,7 @@ class AlertService:
         if not alert:
             raise ValueError("Alert not found")
 
-        log_id = str(alert.get("log_id") or "")
+        log_id = self._resolve_alert_log_id(alert)
         if not log_id:
             raise ValueError("Linked log is missing for this alert")
 
@@ -325,7 +316,7 @@ class AlertService:
         alert = await self._alerts.get_alert(alert_id)
         if not alert:
             raise ValueError("Alert not found")
-        log_id = str(alert.get("log_id") or "")
+        log_id = self._resolve_alert_log_id(alert)
         if not log_id:
             raise ValueError("Linked log is missing for this alert")
         log_doc = await self._logs.get_by_id(log_id)
@@ -370,6 +361,45 @@ class AlertService:
             "alert_id": alert_id,
             "fingerprint": fingerprint,
         }
+
+    @staticmethod
+    def _resolve_alert_log_id(alert: Dict[str, Any]) -> str:
+        children = alert.get("children")
+        if isinstance(children, list) and children:
+            latest = children[-1]
+            if isinstance(latest, dict):
+                value = latest.get("log_id")
+                if value:
+                    return str(value)
+        log_ids = alert.get("log_ids")
+        if isinstance(log_ids, list) and log_ids:
+            return str(log_ids[-1])
+        return str(alert.get("log_id") or "")
+
+    @staticmethod
+    def _extract_ips(linked_log: Optional[Dict[str, Any]]) -> tuple[str, str]:
+        if not isinstance(linked_log, dict):
+            return (MISSING_IP_SENTINEL, MISSING_IP_SENTINEL)
+        network = linked_log.get("network") if isinstance(linked_log.get("network"), dict) else {}
+        src = str(linked_log.get("source_ip") or network.get("srcip") or "").strip() or MISSING_IP_SENTINEL
+        dst = str(linked_log.get("destination_ip") or network.get("dstip") or "").strip() or MISSING_IP_SENTINEL
+        return (src, dst)
+
+    @staticmethod
+    def _build_correlation_key(
+        *,
+        alert_type: str,
+        classification: str,
+        source_ip: str,
+        destination_ip: str,
+    ) -> str:
+        normalized = [
+            str(alert_type or "").strip().lower() or "anomaly",
+            str(classification or "").strip().lower() or ANOMALY_CLASSIFICATION_SENTINEL,
+            str(source_ip or "").strip().lower() or MISSING_IP_SENTINEL,
+            str(destination_ip or "").strip().lower() or MISSING_IP_SENTINEL,
+        ]
+        return "|".join(normalized)
 
     async def get_alert_analytics(self) -> Dict[str, Any]:
         total_alerts = await self._alerts.count_alerts()

@@ -20,7 +20,7 @@ _RETRY_CAP_SEC = 60 * 60
 _IDLE_SLEEP_SEC = 2.0
 _BUSY_SLEEP_SEC = 0.25
 
-_worker_task: Optional[asyncio.Task] = None
+_worker_tasks: list[asyncio.Task] = []
 _worker_stop_event: Optional[asyncio.Event] = None
 
 
@@ -149,7 +149,7 @@ class RawWazuhPipelineService:
             raise
 
         if result["alert_type"] != "benign":
-            severity = "high" if result["alert_type"] == "known_attack" else "medium"
+            severity = self._ml.derive_alert_severity(result)
             await self._alerts.create_or_get_alert(
                 log_id=log_id,
                 alert_type=result["alert_type"],
@@ -250,39 +250,43 @@ class RawWazuhPipelineService:
 
 
 async def start_raw_wazuh_background_worker(settings: Settings) -> None:
-    global _worker_task, _worker_stop_event
-    if _worker_task and not _worker_task.done():
+    global _worker_tasks, _worker_stop_event
+    if _worker_tasks and any(not task.done() for task in _worker_tasks):
         return
 
     _worker_stop_event = asyncio.Event()
-    service = RawWazuhPipelineService(settings)
+    worker_count = max(1, int(settings.raw_wazuh_worker_concurrency))
 
-    async def _runner() -> None:
+    async def _runner(worker_idx: int) -> None:
         assert _worker_stop_event is not None
+        service = RawWazuhPipelineService(settings)
         while not _worker_stop_event.is_set():
             try:
                 processed = await service.process_next_due()
             except Exception:  # noqa: BLE001
-                logger.exception("Raw Wazuh worker loop failure")
+                logger.exception("Raw Wazuh worker %s loop failure", worker_idx)
                 processed = False
             await asyncio.sleep(_BUSY_SLEEP_SEC if processed else _IDLE_SLEEP_SEC)
 
-    _worker_task = asyncio.create_task(_runner(), name="raw-wazuh-processor")
-    logger.info("Raw Wazuh background worker started")
+    _worker_tasks = [
+        asyncio.create_task(_runner(idx + 1), name=f"raw-wazuh-processor-{idx + 1}")
+        for idx in range(worker_count)
+    ]
+    logger.info("Raw Wazuh background workers started: %s", worker_count)
 
 
 async def stop_raw_wazuh_background_worker() -> None:
-    global _worker_task, _worker_stop_event
+    global _worker_tasks, _worker_stop_event
     if _worker_stop_event:
         _worker_stop_event.set()
-    if _worker_task:
+    for task in _worker_tasks:
         try:
-            await asyncio.wait_for(_worker_task, timeout=5.0)
+            await asyncio.wait_for(task, timeout=5.0)
         except asyncio.TimeoutError:
-            _worker_task.cancel()
+            task.cancel()
             try:
-                await _worker_task
+                await task
             except asyncio.CancelledError:
                 pass
-    _worker_task = None
+    _worker_tasks = []
     _worker_stop_event = None

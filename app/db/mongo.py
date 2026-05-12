@@ -84,11 +84,10 @@ async def ensure_indexes() -> None:
     await db.get_collection("alerts").create_index([("created_at", DESCENDING)])
     await db.get_collection("alerts").create_index("severity")
     await db.get_collection("alerts").create_index("alert_type")
-    try:
-        await db.get_collection("alerts").create_index("log_id", unique=True)
-    except PyMongoError as exc:
-        logger.warning("Could not enforce unique alerts.log_id index: %s", exc)
-        await db.get_collection("alerts").create_index("log_id")
+    await db.get_collection("alerts").create_index([("correlation_key", ASCENDING), ("status", ASCENDING), ("last_seen_at", DESCENDING)])
+    await db.get_collection("alerts").create_index([("status", ASCENDING), ("last_seen_at", DESCENDING)])
+    await db.get_collection("alerts").create_index("incident_id")
+    await db.get_collection("alerts").create_index("log_ids")
     await db.get_collection("raw_wazuh_logs").create_index([("ingested_at", DESCENDING)])
     await db.get_collection("raw_wazuh_logs").create_index(
         [("ingest_key", ASCENDING)],

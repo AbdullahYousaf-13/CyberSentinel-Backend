@@ -22,23 +22,31 @@ def create_app() -> FastAPI:
     configure_logging(settings)
 
     app = FastAPI(title="CyberSentinel Backend", version="1.0.0")
-    cors_setting = settings.cors_allow_origins.strip()
-    if cors_setting == "*":
-        cors_origins = ["*"]
-        allow_credentials = False
+    cors_setting = (settings.cors_allow_origins or "").strip()
+    if cors_setting == "*" or not cors_setting:
+        # Use explicit dev origins instead of wildcard so auth-protected routes
+        # consistently include CORS headers for browser fetch requests.
+        cors_origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+        frontend_origin = (settings.frontend_base_url or "").strip()
+        if frontend_origin and frontend_origin not in cors_origins:
+            cors_origins.append(frontend_origin)
     else:
         cors_origins = [
             origin.strip()
             for origin in settings.cors_allow_origins.split(",")
             if origin.strip()
         ]
-        allow_credentials = True
+    allow_credentials = True
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
 
     app.include_router(health.router, prefix="/api/health", tags=["health"])
