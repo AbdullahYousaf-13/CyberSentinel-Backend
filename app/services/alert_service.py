@@ -15,6 +15,7 @@ _PLACEHOLDER_LABELS = {"n/a", "na", "none", "null", "undefined", "unknown_attack
 _NUMERIC_ONLY_RE = re.compile(r"^[+-]?\d+(\.\d+)?$")
 ANOMALY_CLASSIFICATION_SENTINEL = "__anomaly__"
 MISSING_IP_SENTINEL = "__missing_ip__"
+GENERIC_SIGNAL_SENTINEL = "__generic_signal__"
 INCIDENT_INACTIVITY_MINUTES = 10
 
 
@@ -185,11 +186,13 @@ class AlertService:
         if alert_type == "anomaly" and not correlation_classification:
             correlation_classification = ANOMALY_CLASSIFICATION_SENTINEL
         src_ip, dst_ip = self._extract_ips(linked_log)
+        signal_key = self._derive_signal_key(linked_log)
         correlation_key = self._build_correlation_key(
             alert_type=alert_type,
             classification=correlation_classification or "",
             source_ip=src_ip,
             destination_ip=dst_ip,
+            signal_key=signal_key,
         )
         event_time = datetime.utcnow()
         if linked_log:
@@ -392,14 +395,39 @@ class AlertService:
         classification: str,
         source_ip: str,
         destination_ip: str,
+        signal_key: str = GENERIC_SIGNAL_SENTINEL,
     ) -> str:
         normalized = [
             str(alert_type or "").strip().lower() or "anomaly",
             str(classification or "").strip().lower() or ANOMALY_CLASSIFICATION_SENTINEL,
             str(source_ip or "").strip().lower() or MISSING_IP_SENTINEL,
             str(destination_ip or "").strip().lower() or MISSING_IP_SENTINEL,
+            str(signal_key or "").strip().lower() or GENERIC_SIGNAL_SENTINEL,
         ]
         return "|".join(normalized)
+
+    @staticmethod
+    def _derive_signal_key(linked_log: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(linked_log, dict):
+            return GENERIC_SIGNAL_SENTINEL
+        metadata = linked_log.get("metadata") if isinstance(linked_log.get("metadata"), dict) else {}
+        raw = metadata.get("raw_wazuh_payload") if isinstance(metadata.get("raw_wazuh_payload"), dict) else {}
+        rule = raw.get("rule") if isinstance(raw.get("rule"), dict) else {}
+        decoder = raw.get("decoder") if isinstance(raw.get("decoder"), dict) else {}
+
+        rule_id = str(rule.get("id") or "").strip()
+        if rule_id:
+            return f"rule:{rule_id}"
+
+        decoder_name = str(decoder.get("name") or "").strip().lower()
+        if decoder_name:
+            return f"decoder:{decoder_name}"
+
+        message = str(linked_log.get("message") or "").strip().lower()
+        if message:
+            compact = re.sub(r"\s+", " ", message)[:80]
+            return f"msg:{compact}"
+        return GENERIC_SIGNAL_SENTINEL
 
     async def get_alert_analytics(self) -> Dict[str, Any]:
         total_alerts = await self._alerts.count_alerts()

@@ -76,6 +76,7 @@ class AlertRepository:
             "correlation_key": correlation_key,
             "incident_id": None,
             "event_count": 1,
+            "log_id": log_id,
             "log_ids": [log_id],
             "children": [incident_event],
             "alert_type": alert_type,

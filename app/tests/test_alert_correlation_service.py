@@ -1,5 +1,6 @@
 from app.services.alert_service import (
     ANOMALY_CLASSIFICATION_SENTINEL,
+    GENERIC_SIGNAL_SENTINEL,
     MISSING_IP_SENTINEL,
     AlertService,
 )
@@ -11,8 +12,9 @@ def test_correlation_key_includes_type_and_ips() -> None:
         classification="SSH_BRUTE",
         source_ip="203.0.113.10",
         destination_ip="10.0.0.5",
+        signal_key="rule:31120",
     )
-    assert key == "known_attack|ssh_brute|203.0.113.10|10.0.0.5"
+    assert key == "known_attack|ssh_brute|203.0.113.10|10.0.0.5|rule:31120"
 
 
 def test_correlation_key_uses_anomaly_and_missing_ip_sentinels() -> None:
@@ -22,5 +24,7 @@ def test_correlation_key_uses_anomaly_and_missing_ip_sentinels() -> None:
         source_ip="",
         destination_ip="",
     )
-    assert key == f"anomaly|{ANOMALY_CLASSIFICATION_SENTINEL}|{MISSING_IP_SENTINEL}|{MISSING_IP_SENTINEL}"
-
+    assert key == (
+        f"anomaly|{ANOMALY_CLASSIFICATION_SENTINEL}|{MISSING_IP_SENTINEL}|"
+        f"{MISSING_IP_SENTINEL}|{GENERIC_SIGNAL_SENTINEL}"
+    )
