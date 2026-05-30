@@ -1,9 +1,12 @@
 import logging
 from typing import Optional
 from urllib.parse import quote_plus
+
+import certifi
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import PyMongoError
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+
 from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -39,7 +42,7 @@ def resolve_mongo_uri(settings: Settings) -> str:
 async def connect_to_mongo(settings: Settings) -> None:
     global _client, _db
     uri = resolve_mongo_uri(settings)
-    _client = AsyncIOMotorClient(uri)
+    _client = AsyncIOMotorClient(uri, tlsCAFile=certifi.where())
     _db = _client[settings.mongo_db]
     try:
         await _client.admin.command("ping")

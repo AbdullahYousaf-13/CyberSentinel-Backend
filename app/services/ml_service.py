@@ -234,7 +234,7 @@ class MLService:
             ("json-object-features", {"json": {"features": payload}}),
             ("json-object-data", {"json": {"data": payload}}),
             # Some deployments expose `sample: list` as form-data and need repeated `sample` fields.
-            ("form-repeated-sample", {"data": [("sample", str(v)) for v in payload]}),
+            ("form-repeated-sample", {"data": {"sample": [str(v) for v in payload]}}),
             ("form-json-sample", {"data": {"sample": json.dumps(payload)}}),
         ]
 
