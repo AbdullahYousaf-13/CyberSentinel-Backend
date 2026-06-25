@@ -38,8 +38,15 @@ class WazuhDatasetBuilder:
 
     def build(self, raw_file_path: str, min_samples_per_class: int = 50) -> Dict[str, Any]:
         rows = self._load_rows(raw_file_path)
+        dataset = self.build_from_rows(rows, min_samples_per_class=min_samples_per_class)
+        report = dataset.get("report") or {}
+        report["source_path"] = raw_file_path
+        dataset["report"] = report
+        return dataset
+
+    def build_from_rows(self, rows: List[Any], min_samples_per_class: int = 50) -> Dict[str, Any]:
         if len(rows) < 50:
-            raise RuntimeError("Raw Wazuh dataset is too small; expected at least 50 events")
+            raise RuntimeError(f"Only {len(rows)} raw Wazuh events available; expected at least 50")
 
         engineered_logs: List[Dict[str, Any]] = []
         labels_raw: List[str] = []
@@ -80,7 +87,6 @@ class WazuhDatasetBuilder:
                 "class_counts": dict(label_counts),
                 "collapsed_classes": collapse_map,
                 "confidence_distribution": confidence_counts,
-                "source_path": raw_file_path,
             },
         }
 

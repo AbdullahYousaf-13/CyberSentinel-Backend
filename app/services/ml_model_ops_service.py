@@ -6,6 +6,7 @@ import httpx
 
 from app.core.config import Settings
 from app.db.repositories.log_repository import LogRepository
+from app.db.repositories.raw_wazuh_log_repository import RawWazuhLogRepository
 from app.db.repositories.retrain_job_repository import RetrainJobRepository
 from app.ml.training.wazuh_dataset_builder import CLASS_ORDER, WazuhDatasetBuilder
 
@@ -18,6 +19,7 @@ class MLModelOpsService:
         self._settings = settings
         self._jobs = RetrainJobRepository()
         self._logs = LogRepository()
+        self._raw_wazuh_logs = RawWazuhLogRepository()
         self._dataset_builder = WazuhDatasetBuilder()
 
     async def list_versions(self) -> List[Dict[str, Any]]:
@@ -105,13 +107,49 @@ class MLModelOpsService:
                     _running_job_id = None
 
     async def _build_dataset(self) -> Dict[str, Any]:
-        dataset = self._dataset_builder.build(
-            raw_file_path=self._settings.raw_wazuh_training_path,
-            min_samples_per_class=max(1, int(self._settings.min_samples_per_attack_class)),
-        )
+        dataset = await self._build_bootstrap_dataset()
         feedback_sets = await self._fetch_feedback_sets()
         await self._augment_dataset_with_feedback(dataset, feedback_sets)
         return dataset
+
+    async def _build_bootstrap_dataset(self) -> Dict[str, Any]:
+        min_samples = max(1, int(self._settings.min_samples_per_attack_class))
+        db_limit = max(1, int(getattr(self._settings, "retrain_raw_wazuh_db_limit", 50000)))
+        fallback_errors: List[str] = []
+
+        rows = await self._raw_wazuh_logs.list_recent_for_retraining(db_limit)
+        if rows:
+            try:
+                dataset = self._dataset_builder.build_from_rows(rows, min_samples_per_class=min_samples)
+                report = dataset.get("report") or {}
+                report["source"] = "mongodb"
+                report["source_collection"] = "raw_wazuh_logs"
+                report["source_row_count"] = len(rows)
+                report["source_limit"] = db_limit
+                dataset["report"] = report
+                return dataset
+            except RuntimeError as exc:
+                fallback_errors.append(f"Database raw_wazuh_logs dataset unavailable: {exc}")
+        else:
+            fallback_errors.append("No raw Wazuh logs available in database")
+
+        fallback_path = str(getattr(self._settings, "raw_wazuh_training_path", "") or "").strip()
+        if fallback_path:
+            try:
+                dataset = self._dataset_builder.build(
+                    raw_file_path=fallback_path,
+                    min_samples_per_class=min_samples,
+                )
+                report = dataset.get("report") or {}
+                report["source"] = "file_fallback"
+                dataset["report"] = report
+                return dataset
+            except RuntimeError as exc:
+                fallback_errors.append(f"Fallback dataset file unavailable: {exc}")
+        else:
+            fallback_errors.append("RAW_WAZUH_TRAINING_PATH is not configured")
+
+        raise RuntimeError(" | ".join(fallback_errors))
 
     async def _augment_dataset_with_feedback(self, dataset: Dict[str, Any], feedback_sets: Dict[str, Any]) -> None:
         feature_names = dataset.get("feature_names") or []

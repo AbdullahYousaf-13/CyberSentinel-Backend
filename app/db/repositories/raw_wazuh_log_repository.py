@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pymongo import ASCENDING, ReturnDocument, UpdateOne
+from pymongo import ASCENDING, DESCENDING, ReturnDocument, UpdateOne
 from app.db.mongo import get_db
 
 
@@ -63,6 +63,13 @@ class RawWazuhLogRepository:
             sort=[("processing.next_retry_at", ASCENDING), ("ingested_at", ASCENDING)],
             return_document=ReturnDocument.AFTER,
         )
+
+    async def list_recent_for_retraining(self, limit: int) -> List[Dict[str, Any]]:
+        safe_limit = max(1, int(limit))
+        cursor = self._collection.find({}, sort=[("ingested_at", DESCENDING)]).limit(safe_limit)
+        rows = await cursor.to_list(length=safe_limit)
+        rows.reverse()
+        return rows
 
     async def mark_done(self, ingest_key: str, engineered_log_id: str) -> None:
         now = datetime.utcnow()
