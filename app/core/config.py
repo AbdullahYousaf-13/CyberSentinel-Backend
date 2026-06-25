@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         "C:/Users/anumy/Downloads/cybersentinel_raw_wazuh_logs.json",
         env="RAW_WAZUH_TRAINING_PATH",
     )
-    retrain_raw_wazuh_db_limit: int = Field(50000, env="RETRAIN_RAW_WAZUH_DB_LIMIT")
+    retrain_raw_wazuh_db_limit: int = Field(10000, env="RETRAIN_RAW_WAZUH_DB_LIMIT")
     min_samples_per_attack_class: int = Field(50, env="MIN_SAMPLES_PER_ATTACK_CLASS")
     raw_wazuh_worker_concurrency: int = Field(4, env="RAW_WAZUH_WORKER_CONCURRENCY")
 

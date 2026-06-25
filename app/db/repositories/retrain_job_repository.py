@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
-
 from app.db.mongo import get_db
 
 
@@ -26,3 +25,17 @@ class RetrainJobRepository:
         updates["updated_at"] = datetime.utcnow()
         await self._collection.update_one({"_id": ObjectId(job_id)}, {"$set": updates})
 
+    async def fail_incomplete_jobs(self, error_message: str) -> int:
+        now = datetime.utcnow()
+        result = await self._collection.update_many(
+            {"status": {"$in": ["queued", "running"]}},
+            {
+                "$set": {
+                    "status": "failed",
+                    "finished_at": now,
+                    "updated_at": now,
+                    "error": error_message[:1000],
+                }
+            },
+        )
+        return int(result.modified_count)

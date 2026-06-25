@@ -12,6 +12,7 @@ from app.ml.training.wazuh_dataset_builder import CLASS_ORDER, WazuhDatasetBuild
 
 _job_lock = asyncio.Lock()
 _running_job_id: Optional[str] = None
+_INTERRUPTED_RETRAIN_ERROR = "Backend restarted before retrain completed"
 
 
 class MLModelOpsService:
@@ -109,18 +110,29 @@ class MLModelOpsService:
     async def _build_dataset(self) -> Dict[str, Any]:
         dataset = await self._build_bootstrap_dataset()
         feedback_sets = await self._fetch_feedback_sets()
-        await self._augment_dataset_with_feedback(dataset, feedback_sets)
+        dataset = await self._augment_dataset_with_feedback(dataset, feedback_sets)
         return dataset
+
+    async def recover_incomplete_jobs(self) -> int:
+        global _running_job_id
+        count = await self._jobs.fail_incomplete_jobs(_INTERRUPTED_RETRAIN_ERROR)
+        async with _job_lock:
+            _running_job_id = None
+        return count
 
     async def _build_bootstrap_dataset(self) -> Dict[str, Any]:
         min_samples = max(1, int(self._settings.min_samples_per_attack_class))
-        db_limit = max(1, int(getattr(self._settings, "retrain_raw_wazuh_db_limit", 50000)))
+        db_limit = max(1, int(getattr(self._settings, "retrain_raw_wazuh_db_limit", 10000)))
         fallback_errors: List[str] = []
 
         rows = await self._raw_wazuh_logs.list_recent_for_retraining(db_limit)
         if rows:
             try:
-                dataset = self._dataset_builder.build_from_rows(rows, min_samples_per_class=min_samples)
+                dataset = await asyncio.to_thread(
+                    self._dataset_builder.build_from_rows,
+                    rows,
+                    min_samples,
+                )
                 report = dataset.get("report") or {}
                 report["source"] = "mongodb"
                 report["source_collection"] = "raw_wazuh_logs"
@@ -151,19 +163,37 @@ class MLModelOpsService:
 
         raise RuntimeError(" | ".join(fallback_errors))
 
-    async def _augment_dataset_with_feedback(self, dataset: Dict[str, Any], feedback_sets: Dict[str, Any]) -> None:
+    async def _augment_dataset_with_feedback(self, dataset: Dict[str, Any], feedback_sets: Dict[str, Any]) -> Dict[str, Any]:
         feature_names = dataset.get("feature_names") or []
         if not feature_names:
-            return
-        features: List[List[float]] = dataset.get("features") or []
-        labels: List[int] = dataset.get("labels") or []
-        label_map_raw: Dict[str, str] = dataset.get("label_map") or {}
-        class_to_id = {v.lower(): int(k) for k, v in label_map_raw.items()}
+            return dataset
 
         confirmed_known = feedback_sets["confirmed_known"]
         false_positive_ids = feedback_sets["false_positive_log_ids"]
         confirmed_logs = await self._logs.list_logs_by_ids([item["log_id"] for item in confirmed_known])
         false_positive_logs = await self._logs.list_logs_by_ids(list(false_positive_ids))
+
+        return await asyncio.to_thread(
+            self._augment_dataset_with_feedback_sync,
+            dataset,
+            feature_names,
+            confirmed_known,
+            confirmed_logs,
+            false_positive_logs,
+        )
+
+    def _augment_dataset_with_feedback_sync(
+        self,
+        dataset: Dict[str, Any],
+        feature_names: List[str],
+        confirmed_known: List[Dict[str, Any]],
+        confirmed_logs: List[Dict[str, Any]],
+        false_positive_logs: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        features: List[List[float]] = dataset.get("features") or []
+        labels: List[int] = dataset.get("labels") or []
+        label_map_raw: Dict[str, str] = dataset.get("label_map") or {}
+        class_to_id = {v.lower(): int(k) for k, v in label_map_raw.items()}
 
         promoted_by_id = {item["log_id"]: item["classification"] for item in confirmed_known}
         for log in confirmed_logs:
@@ -187,6 +217,7 @@ class MLModelOpsService:
             "false_positive_used": len(false_positive_logs),
         }
         dataset["report"] = report
+        return dataset
 
     async def _fetch_feedback_sets(self) -> Dict[str, Any]:
         rows = await self._logs.list_logs(limit=10000, offset=0, filters={"metadata.feedback.verdict": {"$exists": True}})

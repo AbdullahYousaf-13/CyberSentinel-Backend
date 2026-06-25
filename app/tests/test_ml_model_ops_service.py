@@ -81,6 +81,16 @@ class _FakeBuilder:
         return self.file_dataset
 
 
+class _FakeJobsRepo:
+    def __init__(self, count: int = 0) -> None:
+        self.count = count
+        self.last_error = None
+
+    async def fail_incomplete_jobs(self, error_message: str) -> int:
+        self.last_error = error_message
+        return self.count
+
+
 def test_build_dataset_bootstrap_and_feedback_augmentation() -> None:
     service = MLModelOpsService.__new__(MLModelOpsService)
     service._settings = type(
@@ -89,7 +99,7 @@ def test_build_dataset_bootstrap_and_feedback_augmentation() -> None:
         {
             "raw_wazuh_training_path": "C:/tmp/raw.json",
             "min_samples_per_attack_class": 50,
-            "retrain_raw_wazuh_db_limit": 50000,
+            "retrain_raw_wazuh_db_limit": 10000,
         },
     )()
     service._logs = _FakeLogsRepo()
@@ -162,7 +172,7 @@ def test_build_dataset_raises_clear_error_when_db_and_file_unavailable() -> None
         {
             "raw_wazuh_training_path": "C:/tmp/raw.json",
             "min_samples_per_attack_class": 50,
-            "retrain_raw_wazuh_db_limit": 50000,
+            "retrain_raw_wazuh_db_limit": 10000,
         },
     )()
     service._logs = _FakeLogsRepo()
@@ -180,3 +190,45 @@ def test_build_dataset_raises_clear_error_when_db_and_file_unavailable() -> None
     message = str(exc.value)
     assert "No raw Wazuh logs available in database" in message
     assert "Fallback dataset file unavailable" in message
+
+
+def test_build_dataset_uses_default_db_limit_when_setting_missing() -> None:
+    service = MLModelOpsService.__new__(MLModelOpsService)
+    service._settings = type(
+        "S",
+        (),
+        {
+            "raw_wazuh_training_path": "C:/tmp/raw.json",
+            "min_samples_per_attack_class": 50,
+        },
+    )()
+    service._logs = _FakeLogsRepo()
+    service._raw_wazuh_logs = _FakeRawRepo(rows=[{"payload": {"rule": {"description": "only one row"}}}])
+    service._dataset_builder = _FakeBuilder(db_error="Only 1 usable raw Wazuh events found", file_dataset={
+        "reason": "wazuh_bootstrap_retrain",
+        "features": [[1.0, 2.0], [0.1, 0.0]],
+        "labels": [1, 0],
+        "feature_names": ["f1", "f2"],
+        "feature_schema": "wazuh_native_v1",
+        "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN"},
+        "report": {},
+    })
+
+    async def fake_fetch_feedback_sets():
+        return {"confirmed_known": [], "false_positive_log_ids": set()}
+
+    service._fetch_feedback_sets = fake_fetch_feedback_sets  # type: ignore[method-assign]
+
+    asyncio.run(MLModelOpsService._build_dataset(service))
+
+    assert service._raw_wazuh_logs.last_limit == 10000
+
+
+def test_recover_incomplete_jobs_marks_orphans_failed() -> None:
+    service = MLModelOpsService.__new__(MLModelOpsService)
+    service._jobs = _FakeJobsRepo(count=3)
+
+    count = asyncio.run(MLModelOpsService.recover_incomplete_jobs(service))
+
+    assert count == 3
+    assert service._jobs.last_error == "Backend restarted before retrain completed"

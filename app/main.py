@@ -7,6 +7,7 @@ from app.core.websocket import websocket_router
 from app.db.mongo import connect_to_mongo, close_mongo_connection, ensure_indexes
 from app.routes import alerts, auth, health, logs, ml, raw_wazuh_logs, users
 from app.services.ml_service import MLService
+from app.services.ml_model_ops_service import MLModelOpsService
 from app.services.notification_service import (
     start_notification_digest_worker,
     stop_notification_digest_worker,
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
         await MLService.initialize(settings)
         await connect_to_mongo(settings)
         await ensure_indexes()
+        await MLModelOpsService(settings).recover_incomplete_jobs()
         await start_raw_wazuh_background_worker(settings)
         await start_notification_digest_worker(settings)
 
