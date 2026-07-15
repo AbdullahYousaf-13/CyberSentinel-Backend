@@ -1,121 +1,108 @@
 # CyberSentinel Living Specification
 
 Status: Active  
-Document type: Living specification for the current implemented system  
-Last updated: 2026-04-16  
+Document type: Living specification for the currently implemented backend-centered system  
+Last updated: 2026-07-15  
+Canonical customer runbook: `CUSTOMER_E2E_SETUP_GUIDE.md`
+
 Primary source repos in this workspace:
 
 - `CyberSentinel-Backend`
 - `CyberSentinel-Frontend`
-- `CyberSentinel-AI`
+- `CyberSentinel-Cloud-Model`
+- `CyberSentinel-AI` for historical notebooks and model artifacts
 
 ## 1. Product Summary
 
-CyberSentinel is a security monitoring platform built around classical machine learning, a FastAPI backend, a React frontend, and an optional external investigation-planning agent.
+CyberSentinel is a small-SOC security monitoring application built around:
 
-The current product does four core things:
+- a FastAPI backend,
+- a React frontend,
+- MongoDB storage,
+- Wazuh log ingestion,
+- classical ML inference through a separate cloud-model API.
 
-1. Ingests security-relevant logs through authenticated API calls or a shared-secret Wazuh ingestion endpoint.
-2. Stores logs in MongoDB and runs batch inference over them using Isolation Forest and Random Forest models.
-3. Creates immutable alerts for suspicious results and exposes them over REST and WebSocket.
-4. Lets a human analyst review alerts in a frontend dashboard and optionally request an investigation plan from an external read-only agent service.
+The current product:
 
-The system is intentionally human-in-the-loop. Detection is automated. Investigation help is optional. Remediation is not automated.
+1. Ingests manual/API logs and raw Wazuh archive events.
+2. Stores raw Wazuh events separately from normalized logs.
+3. Engineers Wazuh-native features for supported log types.
+4. Calls a cloud-model service for predictions.
+5. Creates or updates correlated alert incidents for non-benign results.
+6. Lets an admin review logs, alerts, notification preferences, false positives, model versions, retrain jobs, and rollback actions.
 
-## 2. Scope and Non-Goals
+The system is human-in-the-loop. It detects and organizes security signals, but it does not perform automated remediation.
 
-### In scope today
+## 2. Scope And Non-Goals
 
-- Single-instance backend API with FastAPI
-- MongoDB-backed storage for users, logs, alerts, and agent audit events
-- Email/password authentication with JWT sessions
-- Email verification
-- Password reset by emailed 6-digit code
-- Optional TOTP-based 2FA
-- Log ingestion by authenticated user API
-- Machine-to-machine Wazuh ingestion by shared secret
-- Batch-only ML inference
-- Manual model retraining and rollback
-- Optional external model API integration
-- Immutable alert creation
-- WebSocket broadcast when alerts are created
-- React frontend for auth, logs, alerts, dashboard, and settings
-- Optional external investigation planning agent integration
+In scope today:
 
-### Explicitly out of scope today
+- Single FastAPI backend instance.
+- MongoDB-backed users, logs, raw Wazuh events, alerts, retrain jobs, promotions, suppressions, and optional agent audit events.
+- Single-admin bootstrap model.
+- Email/password login with JWT sessions.
+- Email verification before login.
+- Password reset by emailed 6-digit code.
+- Optional TOTP 2FA.
+- Authenticated manual log ingestion.
+- Shared-secret raw Wazuh ingestion.
+- Async raw Wazuh processing workers.
+- Cloud-model-only inference at backend startup.
+- Admin Model Ops: retrain jobs, model version listing, rollback, suppressions.
+- Alert analytics and correlated incident-style alert records.
+- WebSocket broadcast when a new alert incident is created.
+- Optional external investigation planning agent integration.
 
-- Automatic response or remediation
-- Multi-tenant account model
-- Role-based access control
-- Streaming or per-event inference
-- Alert acknowledgement workflow
-- Alert deduplication or correlation
-- Drift detection and model performance monitoring
-- Dataset labeling and retraining workflow UI
-- Frontend consumption of live WebSocket alerts
+Out of scope today:
 
-## 3. Repository and Runtime Topology
+- Multi-tenant account model.
+- Production-grade RBAC beyond first-admin checks.
+- Automated response/remediation.
+- Enterprise Wazuh cluster deployment.
+- Docker Compose packaging.
+- Built-in TLS termination or secrets manager integration.
+- Frontend route hard guards for every authenticated page.
+- Frontend WebSocket consumption.
 
-### `CyberSentinel-Backend`
-
-Authoritative runtime backend. Hosts REST APIs, WebSocket endpoint, MongoDB integration, auth flows, batch inference, model registry loading, and optional agent calls.
-
-### `CyberSentinel-Frontend`
-
-React frontend. Provides login, registration, email verification, password reset, dashboard, alerts, logs, precautions, architecture placeholder, feedback placeholder, and settings pages.
-
-### `CyberSentinel-AI`
-
-Auxiliary ML repo. Contains notebooks, trained model artifacts, and a minimal FastAPI model API that can be called by the backend when `MODEL_API_URL` is configured.
-
-### `CyberSentinel-Agentic-AI`
-
-Expected external agent service repo, but in this workspace the directory is only a placeholder Git repo with no checked-out implementation files. The backend still supports an external agent service through `AGENT_SERVICE_URL`.
-
-## 4. High-Level Architecture
+## 3. Runtime Topology
 
 ```text
-                +----------------------+
-                |  React Frontend      |
-                |  CyberSentinel-      |
-                |  Frontend            |
-                +----------+-----------+
-                           |
-                           | REST + JWT
-                           | WebSocket /api/ws/alerts
-                           v
-+-------------+   +----------------------+   +----------------------+
-| Log Senders  |-->| FastAPI Backend      |-->| MongoDB              |
-| API clients  |   | CyberSentinel-       |   | users, logs, alerts, |
-| Wazuh        |   | Backend              |   | agent_audit          |
-+-------------+   +----------+-----------+   +----------------------+
-                           |
-                           | batch inference
-                           v
-                +----------------------+
-                | ML runtime           |
-                | local registry or    |
-                | external model API   |
-                +----------------------+
-                           |
-                           | optional HTTP /plan
-                           v
-                +----------------------+
-                | External investigation|
-                | agent service         |
-                +----------------------+
+React frontend
+  -> FastAPI backend
+  -> MongoDB Atlas or MongoDB-compatible deployment
+  -> Cloud-model API
+
+Wazuh manager
+  -> /var/ossec/logs/archives/archives.json
+  -> scripts/wazuh_archives_forwarder.py
+  -> POST /api/raw_wazuh_logs
+  -> raw_wazuh_logs collection
+  -> background raw Wazuh workers
+  -> logs collection
+  -> cloud-model prediction
+  -> alerts collection
 ```
 
-## 5. Core Domain Model
+Default local ports:
+
+- Frontend: `http://localhost:3000`
+- Backend: `http://127.0.0.1:8000`
+- Cloud-model API: `http://127.0.0.1:8010`
+
+Hosted customer setup is documented in `CUSTOMER_E2E_SETUP_GUIDE.md`.
+
+## 4. Core Domain Model
 
 ### User
 
 Stored in MongoDB collection `user`.
 
-Implemented fields include:
+Important fields:
 
 - `email`
 - `password_hash`
+- `first_name`
+- `last_name`
 - `is_2fa_enabled`
 - `totp_secret`
 - `email_verified`
@@ -123,158 +110,195 @@ Implemented fields include:
 - `email_verification_expires_at`
 - `password_reset_code_hash`
 - `password_reset_expires_at`
-- `first_name`
-- `last_name`
+- `notification_prefs`
 - `created_at`
 
-Constraints:
+Rules:
 
 - Only the first registration succeeds.
-- After the first user exists, later registration attempts return conflict.
-- In practice, CyberSentinel is currently a single-admin system.
+- The earliest created user is treated as admin.
+- Login is blocked until email is verified.
+- Notification preferences are stored under the user document.
 
-### Log
+### Raw Wazuh Log
+
+Stored in MongoDB collection `raw_wazuh_logs`.
+
+Important fields:
+
+- `ingest_key`
+- `payload`
+- `ingest_meta`
+- `sent_at`
+- `ingested_at`
+- `processing.status`
+- `processing.attempts`
+- `processing.next_retry_at`
+- `processing.last_error`
+- `processing.engineered_log_id`
+
+Rules:
+
+- Raw Wazuh ingestion uses idempotent upsert by `ingest_key`.
+- Forwarder offset metadata is preferred when present.
+- Duplicate raw events are counted but not reinserted.
+- Background workers claim pending/error rows and retry failures with backoff.
+
+### Normalized Log
 
 Stored in MongoDB collection `logs`.
 
-Implemented fields include:
+Important fields:
 
 - `timestamp`
 - `source`
 - `message`
-- `metadata`
 - `severity`
+- `metadata`
 - `ingested_at`
+- `ml_status`
+- `ml_processed_at`
+- `ml_result`
+- `ml_model_version`
+- `ml_error`
+- `ml_skip_reason`
 
-Current implementation note:
+Rules:
 
-- `source` is normalized by ingestion path, not preserved from caller input.
-- Logs created by `POST /api/logs/` are stored with `source="api"`.
-- Logs created by `POST /api/logs/wazuh` are stored with `source="wazuh"`.
-- For Wazuh logs, the original Wazuh payload is preserved under `metadata`.
-- For manual API ingestion, the caller-provided `source` is required by the request schema but is not persisted as the stored top-level `source`.
+- Manual/API logs are created through `POST /api/logs/`.
+- Engineered Wazuh logs preserve the original Wazuh event under `metadata.raw_wazuh_payload`.
+- Raw Wazuh engineered logs carry `metadata.raw_ingest_key`.
+- Batch inference fetches logs whose `ml_status` is missing, `pending`, or `error`.
+- Done/skipped logs are not selected by normal batch inference.
 
-### Alert
+### Alert Incident
 
 Stored in MongoDB collection `alerts`.
 
-Implemented fields include:
+Important fields:
 
+- `incident_id`
+- `status`
 - `created_at`
-- `log_id`
+- `opened_at`
+- `last_seen_at`
+- `closed_at`
+- `correlation_key`
+- `event_count`
+- `log_ids`
+- `children`
 - `alert_type`
-- `severity`
 - `classification`
-- `anomaly_score`
-- `model_version`
+- `source_ip`
+- `destination_ip`
+- `severity`
+- `model_versions_seen`
 - `metadata`
 
-Important properties:
+Rules:
 
-- Alerts are append-only in current implementation.
-- There is no alert update, acknowledgement, or delete API.
-- Alert metadata is intentionally small and currently stores only selected log context, not full raw logs.
+- Alerts are incident-style records, not immutable one-row-per-event records.
+- A new non-benign result creates a new alert incident or updates an open correlated incident.
+- Correlation uses alert type, classification/anomaly sentinel, source IP, destination IP, and signal key.
+- Open incidents are updated when matching events arrive within the inactivity window.
+- Confirm-known and false-positive actions update both alert metadata and linked log metadata.
 
-### Agent Audit Event
+## 5. Primary Flows
 
-Stored in MongoDB collection `agent_audit`.
-
-Implemented fields include:
-
-- `event`
-- `payload`
-- `alert_id` when available
-- `timestamp`
-
-## 6. Primary Flows
-
-### 6.1 Registration and login
+### Registration And Login
 
 1. User registers through `POST /api/auth/register`.
-2. Backend creates the first and only user, hashes the password, generates an email verification token, and sends verification email content.
-3. User must verify email through `GET /api/auth/verify-email?token=...`.
-4. User logs in through `POST /api/auth/login`.
-5. If 2FA is enabled, login also requires a valid TOTP code.
-6. Backend returns a JWT bearer token.
+2. Backend creates the first admin user only.
+3. Backend stores a password hash and email-verification token hash.
+4. Backend sends a verification email through configured SMTP.
+5. User verifies with `GET /api/auth/verify-email?token=...`.
+6. User logs in with `POST /api/auth/login`.
+7. If 2FA is enabled, login also requires a valid TOTP code.
+8. Backend returns a JWT access token.
 
-Behavioral notes:
+If SMTP is missing, the backend logs email content. Customer deployments should configure SMTP.
 
-- If SMTP is not configured, email contents are logged rather than sent.
-- Frontend optionally stores `pending2fa` in local storage after registration, but that flag is frontend-only and not a backend user state.
+### Raw Wazuh Ingestion
 
-### 6.2 2FA lifecycle
+1. Wazuh writes JSON lines to `archives.json`.
+2. `scripts/wazuh_archives_forwarder.py` reads appended bytes with offset tracking.
+3. The forwarder posts batches to `POST /api/raw_wazuh_logs`.
+4. Backend validates `source="wazuh"`, `type="raw"`, request size, batch size, and `x-ingestion-key`.
+5. Backend upserts raw rows into `raw_wazuh_logs`.
+6. Background workers engineer normalized logs.
+7. Supported logs run through cloud-model inference.
+8. Non-benign results create or update alert incidents.
 
-1. Authenticated user requests setup through `POST /api/auth/2fa/setup`.
-2. Backend generates a TOTP secret and provisioning URI.
-3. User confirms setup through `POST /api/auth/2fa/verify`.
-4. User can disable 2FA through `POST /api/auth/2fa/disable` with a current code.
+Primary customer Wazuh integration uses this path.
 
-### 6.3 Password reset
+### Legacy Direct Wazuh Alert Ingestion
 
-1. User requests password reset through `POST /api/auth/password/forgot`.
-2. Backend generates a 6-digit code, stores only its hash and expiry, and sends the code by email.
-3. User verifies the code through `POST /api/auth/password/verify`.
-4. User resets password through `POST /api/auth/password/reset`.
+`POST /api/logs/wazuh` still exists and accepts individual Wazuh alert-like payloads with header `X-WAZUH-KEY`.
 
-### 6.4 Log ingestion
+This endpoint is legacy compatibility, not the primary customer setup path.
 
-Two ingestion paths exist:
+### Manual/API Log Ingestion
 
-1. Human or application ingestion: `POST /api/logs/`
-2. Wazuh ingestion: `POST /api/logs/wazuh`
+1. Authenticated caller posts to `POST /api/logs/`.
+2. Backend stores the payload through `IngestionService`.
+3. Stored source is the ingestion channel (`api`), not necessarily the caller-provided source field.
+4. Later `POST /api/ml/batch-infer` can process eligible logs.
 
-Wazuh normalization rules:
-
-- Auth uses `X-WAZUH-KEY`.
-- Severity is derived from Wazuh rule level:
-  - `>= 12` -> `high`
-  - `>= 7` and `< 12` -> `medium`
-  - otherwise -> `low`
-- Message is derived from `rule.description`, then `full_log`, then decoder name fallback.
-
-### 6.5 Batch inference and alert generation
+### Batch Inference
 
 1. Authenticated caller invokes `POST /api/ml/batch-infer`.
-2. Backend fetches a batch of logs ordered by oldest `timestamp` first.
-3. Feature extractor converts logs into a fixed 78-feature numeric matrix.
-4. Backend uses either:
-  - locally loaded model registry artifacts, or
-  - an external model API if `MODEL_API_URL` is set.
-5. For each non-benign result, backend creates an alert and broadcasts an `alert_created` WebSocket event.
+2. Backend selects eligible logs by `ml_status`.
+3. Unsupported Wazuh decoders are marked skipped.
+4. Supported logs are transformed to features.
+5. Backend calls `POST <MODEL_API_URL>/predict`.
+6. Backend marks each log done/error/skipped.
+7. Non-benign predictions create or update alert incidents.
 
-Current implementation caveat:
+Current Wazuh ML support is scoped to decoder `web-accesslog`. Other Wazuh decoders are skipped with `decoder_not_supported_v1`.
 
-- There is no processed marker on logs.
-- Re-running batch inference over the same dataset can produce duplicate alerts for the same log records.
+### Analyst Feedback
 
-### 6.6 Investigation planning
+Admin-only feedback actions:
+
+- `POST /api/alerts/{alert_id}/confirm-known`
+- `POST /api/alerts/{alert_id}/mark-false-positive`
+
+Effects:
+
+- Confirm-known stores a manual promotion fingerprint and normalized attack label.
+- False-positive stores a suppression fingerprint.
+- Suppressions can be listed, activated, and deactivated through `/api/ml/suppressions`.
+- Feedback can augment future retraining datasets.
+
+### Model Ops
+
+1. Admin queues retraining through `POST /api/ml/models/retrain`.
+2. Backend creates an `ml_retrain_jobs` row.
+3. Backend builds a dataset from recent `raw_wazuh_logs`, with optional file fallback.
+4. Backend augments the dataset with analyst feedback.
+5. Backend posts the training dataset to the cloud-model API.
+6. Cloud-model trains, stores a version, and activates it.
+7. Admin can list versions and activate a previous version through rollback.
+
+Retraining requires enough usable raw Wazuh data and at least benign plus one attack class.
+
+### Optional Investigation Agent
 
 1. Authenticated caller invokes `POST /api/alerts/{alert_id}/investigation-plan`.
-2. Backend loads the alert and sends a reduced payload to the external agent service.
-3. Backend records request and response audit events in `agent_audit`.
-4. Backend returns a structured plan to the frontend caller.
+2. Backend loads the alert.
+3. Backend sends reduced alert metadata to `AGENT_SERVICE_URL`.
+4. Backend records request/response audit events when configured.
+5. Agent response is returned as an investigation plan.
 
-Agent payload sent by backend:
+The agent is advisory and cannot modify backend state through this integration.
 
-- `alert_id`
-- `alert_type`
-- `severity`
-- `classification`
-- `metadata`
+## 6. API Surface
 
-Expected agent response shape:
-
-- `alert_id`
-- `steps[]`
-- each step contains `title`, `description`, `priority`
-
-## 7. API Surface
-
-### Health
+Health:
 
 - `GET /api/health/`
 
-### Auth
+Auth:
 
 - `POST /api/auth/register`
 - `POST /api/auth/login`
@@ -286,192 +310,168 @@ Expected agent response shape:
 - `POST /api/auth/password/verify`
 - `POST /api/auth/password/reset`
 - `GET /api/auth/me`
+- `PATCH /api/auth/me/notification-preferences`
 
-### Logs
+Raw Wazuh:
 
-- `GET /api/logs`
+- `POST /api/raw_wazuh_logs`
+
+Logs:
+
+- `GET /api/logs/`
 - `GET /api/logs/count`
 - `GET /api/logs/{log_id}`
 - `POST /api/logs/`
-- `POST /api/logs/wazuh`
+- `POST /api/logs/wazuh` legacy compatibility
 
-### Alerts
+Alerts:
 
-- `GET /api/alerts`
+- `GET /api/alerts/`
+- `GET /api/alerts/analytics`
 - `GET /api/alerts/{alert_id}`
 - `POST /api/alerts/{alert_id}/investigation-plan`
+- `POST /api/alerts/{alert_id}/confirm-known`
+- `POST /api/alerts/{alert_id}/mark-false-positive`
 
-### Users
+Users:
 
 - `GET /api/users`
 - `GET /api/users/{user_id}`
 
-### ML
+ML:
 
 - `POST /api/ml/batch-infer`
-- `POST /api/ml/retrain`
-- `POST /api/ml/rollback`
+- `POST /api/ml/models/retrain`
+- `GET /api/ml/models/retrain-jobs`
+- `GET /api/ml/models/retrain-jobs/{job_id}`
+- `GET /api/ml/models/versions`
+- `POST /api/ml/models/rollback`
+- `GET /api/ml/suppressions`
+- `POST /api/ml/suppressions/{fingerprint}/deactivate`
+- `POST /api/ml/suppressions/{fingerprint}/activate`
 
-### WebSocket
+WebSocket:
 
-- `GET /api/ws/alerts` as a WebSocket endpoint
+- `GET /api/ws/alerts`
 
-## 8. Query and Response Behavior
+## 7. Query Behavior
 
-### Log listing filters
+Log listing supports:
 
-`GET /api/logs` and `GET /api/logs/count` support:
-
+- `limit`
+- `offset`
 - `source`
 - `severity`
+- `agent`
+- `origin`
+- `source_app`
+- `channel`
 - `start_ts`
 - `end_ts`
 
-Current source filter behavior:
+Alert listing supports:
 
-- Source filtering is a case-insensitive prefix match against stored `logs.source`.
-- Because stored `logs.source` is normalized to `api` or `wazuh`, filtering by original source system name does not currently work as a top-level query.
-
-### Alert listing filters
-
-`GET /api/alerts` supports:
-
+- `limit`
+- `offset`
 - `severity`
 - `alert_type`
 - `start_ts`
 - `end_ts`
 
-## 9. Machine Learning Specification
+Alert analytics returns:
 
-### 9.1 Feature extraction
+- severity counts,
+- trend buckets,
+- classification/type distribution,
+- total alerts,
+- first and last alert timestamps.
 
-Primary v1 path uses a Wazuh-native feature schema (`wazuh_native_v1`) built from raw Wazuh event fields and message-derived behavior signals.
+## 8. Machine Learning Contract
 
-Properties:
+Backend feature schema:
 
-- Fixed output shape: 40 features
-- Inputs include rule metadata, decoder/agent identity buckets, HTTP/message pattern flags, and repetition/rate context
-- Missing or non-numeric values default to `0.0`
-- Legacy CICIDS-style extractor remains as fallback compatibility path for older model versions
+- Current primary schema: `wazuh_native_v1`
+- Current feature count: 40
+- Extractor: `app/ml/features/wazuh_feature_extractor.py`
 
-### 9.2 Local model registry
+Backend cloud-model expectations:
 
-Expected layout:
+- `MODEL_API_URL` is required.
+- Backend validates cloud-model reachability during startup.
+- Backend warns when cloud-model expected feature count differs from backend feature count.
+- Backend sends one prediction request per feature row.
 
-```text
-app/ml/models/
-  registry.json
-  versions/
-    <version>/
-      isolation_forest.joblib
-      random_forest.joblib
-      metadata.json
-```
-
-Runtime safeguards:
-
-- Optional SHA-256 artifact verification
-- Runtime warning if model metadata scikit-learn version differs from current runtime
-- Validation that both models expect the same feature count
-- Validation that inference input matches expected feature count
-
-### 9.3 Local inference decision logic
-
-Current backend logic is:
-
-1. Compute Isolation Forest anomaly scores as negative `score_samples`.
-2. Compute Random Forest class probabilities and predictions.
-3. If Random Forest max class probability is `>= 0.7`, classify as `known_attack`.
-4. Else if anomaly score is `>= ANOMALY_SCORE_THRESHOLD`, classify as `anomaly`.
-5. Else classify as `benign`.
-
-Alert severity mapping after inference:
-
-- `known_attack` -> `high`
-- `anomaly` -> `medium`
-- `benign` -> no alert
-
-### 9.4 External model API mode
-
-If `MODEL_API_URL` is configured, backend calls `POST <MODEL_API_URL>/predict` per feature row.
-
-Current invocation pattern:
-
-- One HTTP request is made per feature row.
-- The backend does not currently batch multiple feature rows into one external model request.
-
-Expected cloud-model response semantics:
+Cloud-model prediction labels:
 
 - `BENIGN`
-- `UNKNOWN_ATTACK`
+- `ANOMALY`
+- `UNKNOWN_ATTACK` treated as anomaly compatibility
 - `KNOWN_ATTACK_<label>`
 
-### 9.5 Retraining and rollback
+Backend mapping:
 
-Retraining is manual and API-triggered.
+- `BENIGN` -> no alert.
+- `ANOMALY` -> anomaly alert.
+- `KNOWN_ATTACK_<label>` -> known attack alert with classification.
+- Unknown labels are treated as anomaly.
 
-`POST /api/ml/retrain` requires:
+Severity mapping uses prediction confidence/score:
 
-- `reason`
-- full `features`
-- full `labels`
+- `>= 0.85` -> `high`
+- `>= 0.70` -> `medium`
+- otherwise -> `low`
 
-Current backend training behavior:
+Cloud-model persistence:
 
-- Bootstrap dataset can be built directly from raw Wazuh logs via `RAW_WAZUH_TRAINING_PATH`.
-- Auto-labeling maps events into v1 known-attack taxonomy plus `other_attack`.
-- Rare attack classes below `MIN_SAMPLES_PER_ATTACK_CLASS` can be collapsed into `other_attack`.
-- Analyst feedback (`false_positive`, `confirmed_known_attack`) is merged into dataset as additional corrections.
-- Isolation Forest is trained on benign subset.
-- Random Forest is trained on full labeled matrix.
-- New model version is saved and immediately activated.
+- The cloud-model can persist model versions in MongoDB when `MONGO_URI`/`MONGO_DB` are configured.
+- It stores artifacts with GridFS-backed model version storage.
+- It can restore the active model version on startup.
+- It can fall back to bundled model files when no persisted active version exists.
 
-Current v1 known-attack taxonomy:
+## 9. Storage And Indexing
 
-- `nosql_injection`
-- `sql_injection`
-- `xss`
-- `csrf`
-- `path_traversal`
-- `file_inclusion`
-- `command_injection`
-- `ssh_bruteforce`
-- `web_login_bruteforce`
-- `password_spray`
-- `account_enumeration`
-- `credential_stuffing`
-- `web_scanner`
-- `nmap_basic_scan`
-- `nmap_advanced_scan`
-- `nmap_evasion_scan`
-- `sensitive_file_probe`
-- `suspicious_automation`
-- `dos_http_flood`
-- `ddos_l7_flood`
-- `other_attack`
+Indexes created on backend startup include:
 
-Rollback behavior:
+`user`:
 
-- `POST /api/ml/rollback` switches the active version if the target version directory exists.
+- unique `email`
+- `email_verification_token_hash`
+- `password_reset_code_hash`
+- notification preference helper indexes
 
-## 10. Investigation Agent Boundary
+`logs`:
 
-The investigation agent is optional and external.
+- descending `timestamp`
+- `source`
+- `severity`
+- unique sparse `metadata.raw_ingest_key`
+- `ml_status` plus timestamp
 
-Hard boundaries enforced by current architecture:
+`alerts`:
 
-- Backend only sends reduced alert payloads.
-- Agent access is over HTTP only.
-- Agent does not receive direct MongoDB access.
-- Agent does not receive backend credentials.
-- Agent does not modify logs, alerts, models, or users.
-- Backend records audit events for agent requests and responses.
+- descending `created_at`
+- `severity`
+- `alert_type`
+- `correlation_key`, `status`, `last_seen_at`
+- `status`, `last_seen_at`
+- `incident_id`
+- `log_ids`
 
-This makes the agent advisory, not authoritative.
+`raw_wazuh_logs`:
 
-## 11. Frontend Specification
+- descending `ingested_at`
+- unique sparse `ingest_key`
+- `processing.status`, `processing.next_retry_at`
 
-### Implemented routes
+Model Ops:
+
+- `ml_promotions.fingerprint`
+- `ml_suppressions.fingerprint`
+- `ml_retrain_jobs.created_at`
+
+## 10. Frontend Contract
+
+Implemented frontend areas:
 
 - `/login`
 - `/register`
@@ -485,126 +485,80 @@ This makes the agent advisory, not authoritative.
 - `/feedback`
 - `/architecture`
 - `/settings`
+- `/model-ops`
 
-### Implemented behavior
+Backend-backed frontend behavior includes:
 
-- Login, registration, email verification, password reset, and 2FA flows are wired to backend APIs.
-- Dashboard loads alerts and logs over REST and derives summary counts client-side.
-- Alerts page supports REST-backed severity and alert-type filtering plus client-side search and CSV export.
-- Logs page supports REST-backed filtering by source, severity, and time range plus responsive pagination.
-- Settings page persists 2FA changes through backend APIs.
+- auth,
+- email verification,
+- password reset,
+- 2FA setup/disable,
+- notification preference updates,
+- logs listing/counts/filters,
+- alert listing/detail/analytics,
+- confirm-known and false-positive feedback,
+- model version/retrain/rollback/suppression operations.
 
-### Current frontend limitations
+Known frontend limitations:
 
-- Dashboard charts use static mock data from `src/data/mockData.js`.
-- Header notifications are mock data.
-- Frontend does not currently connect to `/api/ws/alerts`.
-- Email notification, frequency, and severity preference settings are local UI state only and are not persisted to backend storage.
-- `Architecture` page is placeholder text.
-- `Feedback` page is placeholder text.
-- `Precautions` page is static guidance content, not dynamic system output.
+- Some dashboard visual data is still partially derived or mock-backed.
+- Header notifications are not the same as the WebSocket alert stream.
+- Frontend does not currently maintain a live `/api/ws/alerts` connection.
 
-## 12. Security Model
+## 11. Security Model
 
-Implemented security controls:
+Implemented controls:
 
-- Password hashing with bcrypt via Passlib
-- JWT bearer auth
-- Optional TOTP via `pyotp`
-- Email verification before login
-- Password reset codes stored as hashes, not plaintext
-- Shared-secret Wazuh ingestion
-- Configurable CORS origins
-- Optional model artifact integrity verification
-- Read-only style isolation for external agent integration
+- bcrypt password hashing through Passlib.
+- JWT bearer authentication.
+- Optional TOTP 2FA.
+- Email verification before login.
+- Password reset codes stored as hashes.
+- Shared-secret Wazuh ingestion.
+- Admin-only Model Ops and feedback routes.
+- Configurable CORS allow-list.
+- Optional read-only external agent boundary.
 
-Security limits and required operational hardening:
+Operational requirements:
 
-- No built-in RBAC
-- No built-in TLS termination
-- No built-in secrets manager integration
-- No inbound network restriction at application layer
-- No rate limiting
-- No log-level data redaction framework beyond operator discipline
+- Set strong `JWT_SECRET`, `MODEL_ADMIN_TOKEN`, and `WAZUH_INGEST_KEY`.
+- Configure SMTP for customer deployments.
+- Keep Atlas access restricted.
+- Terminate TLS at the hosting platform or reverse proxy.
+- Rotate any exposed secrets immediately.
 
-## 13. Storage and Indexing
+Known security limitations:
 
-Indexes created on startup:
+- No general RBAC role matrix.
+- No built-in rate limiting.
+- No built-in secrets manager integration.
+- No built-in application-layer IP allow-listing.
 
-### `user`
+## 12. Deployment And Configuration
 
-- unique `email`
-- `email_verification_token_hash`
-- `password_reset_code_hash`
+Canonical customer setup is `CUSTOMER_E2E_SETUP_GUIDE.md`.
 
-### `logs`
-
-- descending `timestamp`
-- `source`
-- `severity`
-
-### `alerts`
-
-- descending `created_at`
-- `severity`
-- `alert_type`
-- `log_id`
-
-There is currently no explicit index creation for `agent_audit`.
-
-## 14. Deployment and Configuration
-
-### Backend deployment
-
-Implemented deployment assets:
-
-- `SETUP.md`
-- `.env`
-
-Current runtime scope:
-
-- Backend process only
-- MongoDB is expected to be external
-- Frontend is expected to be run separately
-
-### Core environment variables
-
-Application:
+Important backend env:
 
 - `APP_ENV`
 - `DEBUG_MODE`
 - `DETAILED_LOGGING`
-
-Database:
-
 - `MONGO_URI`
 - `MONGO_DB`
-
-Auth:
-
 - `JWT_SECRET`
 - `JWT_ALGORITHM`
 - `JWT_EXP_MINUTES`
-
-Wazuh:
-
-- `WAZUH_INGEST_KEY`
-
-Models:
-
-- `MODEL_DIR`
-- `MODEL_INTEGRITY_REQUIRED`
-- `ANOMALY_SCORE_THRESHOLD`
 - `MODEL_API_URL`
 - `MODEL_API_TIMEOUT_SECONDS`
-
-Agent:
-
+- `MODEL_ADMIN_TOKEN`
+- `ANOMALY_SCORE_THRESHOLD`
+- `RAW_WAZUH_TRAINING_PATH`
+- `RETRAIN_RAW_WAZUH_DB_LIMIT`
+- `MIN_SAMPLES_PER_ATTACK_CLASS`
+- `WAZUH_INGEST_KEY`
+- `RAW_WAZUH_WORKER_CONCURRENCY`
 - `AGENT_SERVICE_URL`
 - `AGENT_TIMEOUT_SECONDS`
-
-Frontend/email:
-
 - `CORS_ALLOW_ORIGINS`
 - `FRONTEND_BASE_URL`
 - `SMTP_HOST`
@@ -617,57 +571,79 @@ Frontend/email:
 - `EMAIL_VERIFY_TTL_MINUTES`
 - `PASSWORD_RESET_TTL_MINUTES`
 
-## 15. Automated Verification Coverage
+Important cloud-model env:
 
-Current backend automated tests cover:
+- `MODEL_ADMIN_TOKEN`
+- `MONGO_URI` when persisted model versions are desired
+- `MONGO_DB` when persisted model versions are desired
 
-- health endpoint
-- feature extractor output shape and alias handling
+Important frontend env:
 
-Current gaps:
+- `REACT_APP_API_BASE_URL`
 
-- auth flow tests
-- ingestion tests
-- alert creation tests
-- ML inference integration tests
-- model registry tests
-- agent integration tests
-- frontend tests for real backend interactions
+Important Wazuh forwarder env:
 
-## 16. Known Implementation Gaps and Honest Notes
+- `CS_BACKEND_URL`
+- `WAZUH_INGEST_KEY`
+- `WAZUH_ARCHIVES_PATH`
+- `WAZUH_FORWARDER_OFFSET_PATH`
+- `WAZUH_FORWARDER_POLL_SEC`
 
-These items are part of the current truth and should not be hidden by the spec:
+## 13. Automated Verification Coverage
 
-1. Alert generation can duplicate results because logs are re-read without a processed state.
-2. Stored log `source` currently reflects ingestion channel (`api` or `wazuh`) rather than original source identifier.
-3. `POST /api/logs/` echoes caller payload in the response, which can differ from the stored document's `source`.
-4. Frontend dashboards are partially real and partially mocked.
-5. Frontend does not yet use the backend WebSocket stream even though the backend emits it.
-6. Agent integration contract exists, but the agent implementation itself is not present in this workspace.
-7. Retraining requires caller-supplied feature arrays and labels over API; there is no managed dataset pipeline in the backend.
+Backend tests currently cover:
 
-## 17. Change Policy
+- health endpoint,
+- Mongo configuration,
+- auth notification preferences,
+- log context and filtering,
+- raw Wazuh pipeline preparation,
+- Wazuh dataset builder,
+- Wazuh feature extractor,
+- ML batch inference flow,
+- cloud-only ML behavior,
+- model ops service behavior,
+- alert analytics and correlation behavior,
+- notification service and preference behavior.
 
-This document should be updated whenever any of the following changes:
+Frontend tests currently cover:
 
-- API routes or request/response contracts
-- Auth lifecycle or security requirements
-- Data storage model or indexing strategy
-- Feature extraction logic
-- Inference decision logic
-- Model registry layout
-- Agent request/response contract
-- Frontend pages that move from mocked to real backend-backed behavior
-- Deployment model or required environment variables
+- app/login rendering,
+- dashboard behavior,
+- logs page filters,
+- model ops page behavior,
+- settings page behavior,
+- security view mappers,
+- attack chart rendering.
 
-This document does not need to change for purely internal refactors that preserve behavior.
+Cloud-model tests cover:
 
-## 18. Canonical Source Rule
+- hybrid model version behavior.
 
-When other docs conflict with this file, this file should be treated as the authoritative living spec and the other docs should be reconciled.
+## 14. Known Implementation Gaps
 
-At the time of this update, older docs in the repo include stale assumptions that this file corrects, including:
+Current gaps that should remain visible:
 
-- the older backend living spec
-- deployment notes that reference an outdated feature-count assumption
-- UI pages that imply live features which are still mocked
+1. Multi-user RBAC is not implemented.
+2. Wazuh ML inference is currently scoped to `web-accesslog`.
+3. Frontend does not consume backend WebSocket alerts.
+4. Some frontend content remains mock/static.
+5. Production operations need external TLS, secrets management, retention, backups, and monitoring.
+6. Retraining depends on sufficient raw Wazuh data quality and volume.
+7. The optional investigation agent service is external and may not be present in this workspace.
+
+## 15. Documentation Source Of Truth
+
+Current docs kept in the backend repo:
+
+- `CUSTOMER_E2E_SETUP_GUIDE.md` for customer setup and Wazuh runbook.
+- `cybersentinel_living_spec.md` for current implemented behavior.
+- `README.md` for short backend orientation.
+- `TODOS.md` for backlog notes.
+
+When these files conflict:
+
+1. Treat code and tests as implementation truth.
+2. Update `cybersentinel_living_spec.md`.
+3. Update `CUSTOMER_E2E_SETUP_GUIDE.md` if setup behavior changed.
+4. Keep `README.md` brief and link to the canonical docs.

@@ -1,56 +1,71 @@
 # CyberSentinel Backend
 
-CyberSentinel is a classical ML based security monitoring backend with a sandboxed investigation planning agent hosted in a sibling repository. This backend ingests logs, performs batch ML inference through a separate cloud-model API service, stores immutable alerts, and pushes alerts over WebSockets.
+CyberSentinel is a security monitoring backend built with FastAPI, MongoDB, raw Wazuh ingestion, and a separate cloud-model API for classical ML inference.
+
+The backend receives logs, stores raw and normalized security events, runs ML inference through the cloud-model service, creates correlated alert incidents, broadcasts new alerts over WebSockets, and supports admin-only Model Ops workflows.
 
 ## Architecture
-- FastAPI service exposes REST APIs for ingestion, auth, alerts, and ML operations.
-- MongoDB stores logs and immutable alerts in separate collections.
-- ML pipeline runs batch inference by calling the external cloud-model API.
-- WebSockets broadcast new alerts to subscribed clients.
-- Agent integration is a read-only HTTP client to a separate repo/service.
-- Agent audit logs are stored in MongoDB to track requests and responses.
+
+- FastAPI exposes REST APIs for auth, users, logs, raw Wazuh ingestion, alerts, and ML operations.
+- MongoDB stores users, raw Wazuh logs, normalized logs, alert incidents, retrain jobs, suppressions, promotions, and optional agent audit records.
+- The cloud-model API owns model loading, prediction, training, version listing, and activation.
+- Raw Wazuh ingestion stores immutable raw payloads first, then an async worker engineers normalized logs and calls ML.
+- WebSockets broadcast newly created alert incidents to subscribed clients.
+- Optional external investigation-agent integration is read-only from the backend perspective.
 
 ## ML Pipeline
-1. Logs are ingested via REST into the logs collection.
-2. Feature extraction converts logs into a numeric feature matrix.
-3. Batch inference sends feature vectors to the cloud-model API for prediction.
-4. Hybrid decision logic:
-   - If Random Forest predicts a known attack with high probability, create a known attack alert.
-   - Else if Isolation Forest anomaly score exceeds the threshold, create an anomaly alert.
-5. Alerts are immutable and stored separately from logs.
-6. Model integrity hashes are verified on load.
 
-## Agent Boundaries
-- The investigation planning agent is external and sandboxed in a separate repo: `CyberSentinel-Agentic-AI`.
-- The agent only receives alert metadata (no raw logs).
-- The agent cannot access internal services or databases.
-- The agent cannot modify system state.
+1. Logs are ingested through authenticated REST or raw Wazuh archive forwarding.
+2. Raw Wazuh batches are accepted at `POST /api/raw_wazuh_logs` with header `x-ingestion-key`.
+3. The raw Wazuh pipeline deduplicates events by ingest metadata, stores raw payloads, engineers normalized log records, and marks processing status.
+4. Wazuh-native feature extraction converts supported logs into the `wazuh_native_v1` numeric schema.
+5. Backend calls the cloud-model API for prediction.
+6. Non-benign results create or update correlated alert incidents.
+7. Analyst feedback can confirm known attacks, mark false positives, create suppressions/promotions, and feed future retraining.
 
 ## Security Decisions
+
 - JWT authentication with password hashing and optional TOTP-based 2FA.
+- Email verification is required before login.
 - Single-admin v1 registration gate.
-- Cloud-model service boundary keeps model binaries outside this backend repo.
-- Audit-safe agent integration by keeping it read-only.
-- Configurable detailed logging through `DETAILED_LOGGING` or `DEBUG_MODE`.
+- Shared-secret Wazuh ingestion through `WAZUH_INGEST_KEY`.
+- Cloud-model admin actions require matching `MODEL_ADMIN_TOKEN` in backend and cloud-model services.
+- Configurable CORS origins through `CORS_ALLOW_ORIGINS`.
+- Optional investigation-agent integration sends reduced alert metadata only.
 
 ## API Overview
+
+- `GET /api/health/` health check.
 - `POST /api/auth/register` create the first admin user.
 - `POST /api/auth/login` authenticate with optional TOTP code.
-- `POST /api/logs/` ingest a log via REST.
-- `POST /api/ml/batch-infer` run batch ML inference.
-- `POST /api/ml/models/retrain` queue a retrain job (admin only).
-- `GET /api/ml/models/retrain-jobs` list retrain jobs (admin only).
-- `GET /api/ml/models/versions` list model versions (admin only).
-- `POST /api/ml/models/rollback` activate a previous model version (admin only).
-- `GET /api/alerts/` list alerts.
-- `POST /api/alerts/{id}/confirm-known` confirm anomaly as known-attack label (admin only).
-- `POST /api/alerts/{id}/investigation-plan` call the external agent service.
+- `GET /api/auth/me` read current user profile and notification preferences.
+- `POST /api/raw_wazuh_logs` ingest raw Wazuh archive batches.
+- `POST /api/logs/` ingest a manual/API log.
+- `GET /api/logs/` list normalized logs.
+- `GET /api/logs/count` count normalized logs.
+- `GET /api/alerts/` list alert incidents.
+- `GET /api/alerts/analytics` get alert analytics.
+- `POST /api/alerts/{id}/confirm-known` confirm an anomaly as a known attack.
+- `POST /api/alerts/{id}/mark-false-positive` suppress a false positive.
+- `POST /api/alerts/{id}/investigation-plan` call the optional external agent service.
+- `POST /api/ml/batch-infer` run batch ML inference for pending logs.
+- `POST /api/ml/models/retrain` queue an admin retrain job.
+- `GET /api/ml/models/retrain-jobs` list retrain jobs.
+- `GET /api/ml/models/versions` list cloud-model versions.
+- `POST /api/ml/models/rollback` activate a previous cloud-model version.
+- `GET /api/ml/suppressions` list false-positive suppressions.
 - `GET /api/ws/alerts` WebSocket for alert notifications.
 
-## Notes
-- Backend startup requires `MODEL_API_URL` and verifies the cloud-model API is reachable.
-- Model ops endpoints require `MODEL_ADMIN_TOKEN` configured in backend and cloud-model env.
-- Place model `.pkl` files in `CyberSentinel-Cloud-Model/models/` on each developer machine.
-- One-time terminology migration script: `python scripts/migrate_unknown_attack_to_anomaly.py`.
+## Documentation
 
-For full setup instructions, see `SETUP.md`.
+- Customer setup and Wazuh runbook: `CUSTOMER_E2E_SETUP_GUIDE.md`
+- Current implemented-system spec: `cybersentinel_living_spec.md`
+- Forwarder script: `scripts/wazuh_archives_forwarder.py`
+
+## Runtime Notes
+
+- Backend startup requires `MODEL_API_URL` and validates that the cloud-model API is reachable.
+- MongoDB is required; use `MONGO_URI` or the `MONGO_USER`/`MONGO_PASSWORD`/`MONGO_HOST` fallback.
+- `MODEL_ADMIN_TOKEN` must match in backend and cloud-model env for Model Ops.
+- `WAZUH_INGEST_KEY` must match the Wazuh forwarder env.
+- SMTP must be configured for production account verification and password reset flows.
