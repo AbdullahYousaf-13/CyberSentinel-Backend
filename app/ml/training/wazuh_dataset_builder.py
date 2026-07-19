@@ -37,7 +37,7 @@ class WazuhDatasetBuilder:
         self._extractor = WazuhFeatureExtractor()
 
     def build(self, raw_file_path: str, min_samples_per_class: int = 50) -> Dict[str, Any]:
-        rows = self._load_rows(raw_file_path)
+        rows = self.load_rows(raw_file_path)
         dataset = self.build_from_rows(rows, min_samples_per_class=min_samples_per_class)
         report = dataset.get("report") or {}
         report["source_path"] = raw_file_path
@@ -45,28 +45,26 @@ class WazuhDatasetBuilder:
         return dataset
 
     def build_from_rows(self, rows: List[Any], min_samples_per_class: int = 50) -> Dict[str, Any]:
-        if len(rows) < 50:
-            raise RuntimeError(f"Only {len(rows)} raw Wazuh events available; expected at least 50")
+        prepared_rows = self.prepare_rows(rows)
+        return self.build_from_prepared_rows(prepared_rows, min_samples_per_class=min_samples_per_class)
 
-        engineered_logs: List[Dict[str, Any]] = []
-        labels_raw: List[str] = []
+    def build_from_prepared_rows(
+        self,
+        prepared_rows: List[Dict[str, Any]],
+        min_samples_per_class: int = 50,
+        report: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        if len(prepared_rows) < 50:
+            raise RuntimeError(f"Only {len(prepared_rows)} raw Wazuh events available; expected at least 50")
+
+        engineered_logs = [item["log"] for item in prepared_rows]
+        labels_raw = [item["label"] for item in prepared_rows]
         confidence_counts = {"high": 0, "medium": 0, "low": 0}
-        for row in rows:
-            payload = self._normalize_payload(row)
-            if not payload:
-                continue
-            log = self._to_log(payload)
-            label, confidence = self._auto_label(payload, log)
+        for item in prepared_rows:
+            confidence = item.get("confidence", "low")
             if confidence not in confidence_counts:
                 confidence = "low"
             confidence_counts[confidence] += 1
-            if confidence == "low" and label != "benign":
-                label = "other_attack"
-            engineered_logs.append(log)
-            labels_raw.append(label)
-
-        if len(engineered_logs) < 50:
-            raise RuntimeError("No usable Wazuh events found in raw dataset")
 
         collapsed, collapse_map = self._collapse_rare_classes(labels_raw, min_samples_per_class)
         features = self._extractor.transform(engineered_logs)
@@ -75,6 +73,15 @@ class WazuhDatasetBuilder:
         encoded_labels = [label_to_id.get(name, label_to_id["other_attack"]) for name in collapsed]
 
         label_counts = Counter(collapsed)
+        dataset_report = {
+            "samples": len(encoded_labels),
+            "class_counts": dict(label_counts),
+            "collapsed_classes": collapse_map,
+            "confidence_distribution": confidence_counts,
+        }
+        if report:
+            dataset_report.update(report)
+
         return {
             "reason": "wazuh_bootstrap_retrain",
             "feature_schema": self._extractor.SCHEMA_ID,
@@ -82,16 +89,43 @@ class WazuhDatasetBuilder:
             "features": features.tolist(),
             "labels": encoded_labels,
             "label_map": {str(idx): name.upper() for name, idx in label_to_id.items()},
-            "report": {
-                "samples": len(encoded_labels),
-                "class_counts": dict(label_counts),
-                "collapsed_classes": collapse_map,
-                "confidence_distribution": confidence_counts,
-            },
+            "report": dataset_report,
+            "_training_raw_ingest_keys": [item.get("raw_ingest_key") for item in prepared_rows],
+            "_training_row_keys": [item.get("dedup_key") for item in prepared_rows],
         }
 
+    def prepare_rows(self, rows: List[Any]) -> List[Dict[str, Any]]:
+        if len(rows) < 50:
+            raise RuntimeError(f"Only {len(rows)} raw Wazuh events available; expected at least 50")
+
+        prepared_rows: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = self._normalize_payload(row)
+            if not payload:
+                continue
+            log = self._to_log(payload)
+            label, confidence = self._auto_label(payload, log)
+            if confidence == "low" and label != "benign":
+                label = "other_attack"
+            prepared_rows.append(
+                {
+                    "row": row,
+                    "payload": payload,
+                    "log": log,
+                    "label": label,
+                    "confidence": confidence,
+                    "raw_ingest_key": self._extract_raw_ingest_key(row),
+                    "dedup_key": self._dedup_key(row, payload),
+                    "timestamp": payload.get("timestamp"),
+                }
+            )
+
+        if len(prepared_rows) < 50:
+            raise RuntimeError("No usable Wazuh events found in raw dataset")
+        return prepared_rows
+
     @staticmethod
-    def _load_rows(raw_file_path: str) -> List[Any]:
+    def load_rows(raw_file_path: str) -> List[Any]:
         path = Path(raw_file_path)
         if not path.is_file():
             raise RuntimeError(f"Raw Wazuh dataset file not found: {raw_file_path}")
@@ -116,6 +150,27 @@ class WazuhDatasetBuilder:
             except json.JSONDecodeError:
                 continue
         return rows
+
+    @staticmethod
+    def _extract_raw_ingest_key(row: Any) -> str | None:
+        if not isinstance(row, dict):
+            return None
+        value = row.get("ingest_key")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        metadata = row.get("metadata")
+        if isinstance(metadata, dict):
+            raw_ingest_key = metadata.get("raw_ingest_key")
+            if isinstance(raw_ingest_key, str) and raw_ingest_key.strip():
+                return raw_ingest_key.strip()
+        return None
+
+    @staticmethod
+    def _dedup_key(row: Any, payload: Dict[str, Any]) -> str:
+        raw_ingest_key = WazuhDatasetBuilder._extract_raw_ingest_key(row)
+        if raw_ingest_key:
+            return f"ingest:{raw_ingest_key}"
+        return "payload:" + json.dumps(payload, sort_keys=True, ensure_ascii=True)
 
     @staticmethod
     def _normalize_payload(row: Any) -> Dict[str, Any] | None:

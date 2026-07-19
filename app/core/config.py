@@ -36,6 +36,7 @@ class Settings(BaseSettings):
         env="RAW_WAZUH_TRAINING_PATH",
     )
     retrain_raw_wazuh_db_limit: int = Field(10000, env="RETRAIN_RAW_WAZUH_DB_LIMIT")
+    retrain_historical_base_target: int = Field(25000, env="RETRAIN_HISTORICAL_BASE_TARGET")
     min_samples_per_attack_class: int = Field(50, env="MIN_SAMPLES_PER_ATTACK_CLASS")
     raw_wazuh_worker_concurrency: int = Field(4, env="RAW_WAZUH_WORKER_CONCURRENCY")
 

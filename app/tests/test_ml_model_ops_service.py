@@ -43,42 +43,60 @@ class _FakeLogsRepo:
 
 class _FakeBuilder:
     def __init__(self, db_dataset=None, file_dataset=None, db_error=None, file_error=None) -> None:
-        self.db_dataset = db_dataset or {
-            "reason": "wazuh_bootstrap_retrain",
-            "features": [[1.0, 2.0], [0.1, 0.0]],
-            "labels": [1, 0],
-            "feature_names": ["f1", "f2"],
-            "feature_schema": "wazuh_native_v1",
-            "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN", "2": "OTHER_ATTACK"},
-            "report": {},
-        }
-        self.file_dataset = file_dataset or {
-            "reason": "wazuh_bootstrap_retrain",
-            "features": [[2.0, 3.0], [0.2, 0.1]],
-            "labels": [1, 0],
-            "feature_names": ["f1", "f2"],
-            "feature_schema": "wazuh_native_v1",
-            "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN", "2": "OTHER_ATTACK"},
-            "report": {},
-        }
+        self.db_dataset = db_dataset or {}
+        self.file_dataset = file_dataset or {}
         self.db_error = db_error
         self.file_error = file_error
 
-    def build_from_rows(self, rows, min_samples_per_class: int = 50):
-        assert min_samples_per_class == 50
-        if self.db_error:
+    def prepare_rows(self, rows):
+        if self.db_error and any("ingest_key" not in row for row in rows):
             raise RuntimeError(self.db_error)
-        return {
-            **self.db_dataset,
-            "report": {**(self.db_dataset.get("report") or {}), "db_rows_seen": len(rows)},
-        }
+        prepared = []
+        for idx, row in enumerate(rows):
+            ingest_key = row.get("ingest_key", f"rk{idx}")
+            payload = row.get("payload") or {}
+            prepared.append(
+                {
+                    "row": row,
+                    "payload": payload,
+                    "log": {"metadata": {"raw_wazuh_payload": payload}},
+                    "label": str(payload.get("label") or ("nmap_basic_scan" if idx % 2 == 0 else "benign")),
+                    "confidence": "high",
+                    "raw_ingest_key": ingest_key,
+                    "dedup_key": f"ingest:{ingest_key}",
+                    "timestamp": payload.get("timestamp", f"2026-05-{idx + 1:02d}T00:00:00Z"),
+                }
+            )
+        return prepared
 
-    def build(self, raw_file_path: str, min_samples_per_class: int = 50):
-        assert raw_file_path.endswith(".json")
+    def build_from_prepared_rows(self, prepared_rows, min_samples_per_class: int = 50, report=None):
         assert min_samples_per_class == 50
+        features = []
+        labels = []
+        raw_ingest_keys = []
+        for idx, row in enumerate(prepared_rows):
+            label = 0 if row["label"] == "benign" else 1
+            features.append([float(idx), float(label)])
+            labels.append(label)
+            raw_ingest_keys.append(row.get("raw_ingest_key"))
+        dataset = {
+            "reason": "wazuh_bootstrap_retrain",
+            "features": features,
+            "labels": labels,
+            "feature_names": ["f1", "f2"],
+            "feature_schema": "wazuh_native_v1",
+            "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN", "2": "OTHER_ATTACK"},
+            "report": report or {},
+            "_training_raw_ingest_keys": raw_ingest_keys,
+        }
+        dataset.update(self.db_dataset)
+        return dataset
+
+    def load_rows(self, raw_file_path: str):
+        assert raw_file_path.endswith(".json")
         if self.file_error:
             raise RuntimeError(self.file_error)
-        return self.file_dataset
+        return self.file_dataset or [{"ingest_key": f"file-{idx}", "payload": {"label": "benign"}} for idx in range(60)]
 
 
 class _FakeJobsRepo:
@@ -100,13 +118,14 @@ def test_build_dataset_bootstrap_and_feedback_augmentation() -> None:
             "raw_wazuh_training_path": "C:/tmp/raw.json",
             "min_samples_per_attack_class": 50,
             "retrain_raw_wazuh_db_limit": 10000,
+            "retrain_historical_base_target": 25000,
         },
     )()
     service._logs = _FakeLogsRepo()
     service._raw_wazuh_logs = _FakeRawRepo(
         rows=[
-            {"payload": {"rule": {"description": "normal request"}, "agent": {"name": "sensor"}}},
-            {"payload": {"rule": {"description": "scanner detected"}, "agent": {"name": "sensor"}}},
+            {"ingest_key": f"rk{idx}", "payload": {"label": ("nmap_basic_scan" if idx % 3 == 0 else "benign"), "timestamp": f"2026-05-{(idx % 28) + 1:02d}T00:00:00Z"}}
+            for idx in range(60)
         ]
     )
     service._dataset_builder = _FakeBuilder()
@@ -124,10 +143,15 @@ def test_build_dataset_bootstrap_and_feedback_augmentation() -> None:
     dataset = asyncio.run(MLModelOpsService._build_dataset(service))
 
     assert dataset["label_map"]["0"] == "BENIGN"
-    assert len(dataset["features"]) == 4
+    assert len(dataset["features"]) == 62
     assert dataset["labels"].count(0) >= 2
     assert dataset["report"]["source"] == "mongodb"
-    assert dataset["report"]["source_row_count"] == 2
+    assert dataset["report"]["source_row_count"] == 60
+    assert dataset["report"]["historical_base_samples"] == 0
+    assert dataset["report"]["recent_slice_samples"] == 60
+    assert dataset["report"]["final_pre_feedback_samples"] == 60
+    assert dataset["report"]["final_total_samples"] == 62
+    assert dataset["report"]["selection_strategy"] == "balanced_historical_base_plus_recent_slice"
 
 
 def test_build_dataset_falls_back_to_file_when_db_rows_fail() -> None:
@@ -139,19 +163,15 @@ def test_build_dataset_falls_back_to_file_when_db_rows_fail() -> None:
             "raw_wazuh_training_path": "C:/tmp/raw.json",
             "min_samples_per_attack_class": 50,
             "retrain_raw_wazuh_db_limit": 123,
+            "retrain_historical_base_target": 25000,
         },
     )()
     service._logs = _FakeLogsRepo()
     service._raw_wazuh_logs = _FakeRawRepo(rows=[{"payload": {"rule": {"description": "only one row"}}}])
-    service._dataset_builder = _FakeBuilder(db_error="Only 1 usable raw Wazuh events found", file_dataset={
-        "reason": "wazuh_bootstrap_retrain",
-        "features": [[1.0, 2.0], [0.1, 0.0]],
-        "labels": [1, 0],
-        "feature_names": ["f1", "f2"],
-        "feature_schema": "wazuh_native_v1",
-        "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN"},
-        "report": {},
-    })
+    service._dataset_builder = _FakeBuilder(
+        db_error="Only 1 usable raw Wazuh events found",
+        file_dataset=[{"ingest_key": f"file-{idx}", "payload": {"label": ("nmap_basic_scan" if idx % 4 == 0 else "benign")}} for idx in range(60)],
+    )
 
     async def fake_fetch_feedback_sets():
         return {"confirmed_known": [], "false_positive_log_ids": set()}
@@ -161,7 +181,9 @@ def test_build_dataset_falls_back_to_file_when_db_rows_fail() -> None:
     dataset = asyncio.run(MLModelOpsService._build_dataset(service))
 
     assert dataset["report"]["source"] == "file_fallback"
-    assert service._raw_wazuh_logs.last_limit == 123
+    assert dataset["report"]["source_path"] == "C:/tmp/raw.json"
+    assert dataset["report"]["recent_slice_target"] == 123
+    assert service._raw_wazuh_logs.last_limit == 50000
 
 
 def test_build_dataset_raises_clear_error_when_db_and_file_unavailable() -> None:
@@ -173,6 +195,7 @@ def test_build_dataset_raises_clear_error_when_db_and_file_unavailable() -> None
             "raw_wazuh_training_path": "C:/tmp/raw.json",
             "min_samples_per_attack_class": 50,
             "retrain_raw_wazuh_db_limit": 10000,
+            "retrain_historical_base_target": 25000,
         },
     )()
     service._logs = _FakeLogsRepo()
@@ -200,19 +223,15 @@ def test_build_dataset_uses_default_db_limit_when_setting_missing() -> None:
         {
             "raw_wazuh_training_path": "C:/tmp/raw.json",
             "min_samples_per_attack_class": 50,
+            "retrain_historical_base_target": 25000,
         },
     )()
     service._logs = _FakeLogsRepo()
     service._raw_wazuh_logs = _FakeRawRepo(rows=[{"payload": {"rule": {"description": "only one row"}}}])
-    service._dataset_builder = _FakeBuilder(db_error="Only 1 usable raw Wazuh events found", file_dataset={
-        "reason": "wazuh_bootstrap_retrain",
-        "features": [[1.0, 2.0], [0.1, 0.0]],
-        "labels": [1, 0],
-        "feature_names": ["f1", "f2"],
-        "feature_schema": "wazuh_native_v1",
-        "label_map": {"0": "BENIGN", "1": "NMAP_BASIC_SCAN"},
-        "report": {},
-    })
+    service._dataset_builder = _FakeBuilder(
+        db_error="Only 1 usable raw Wazuh events found",
+        file_dataset=[{"ingest_key": f"file-{idx}", "payload": {"label": ("nmap_basic_scan" if idx % 4 == 0 else "benign")}} for idx in range(60)],
+    )
 
     async def fake_fetch_feedback_sets():
         return {"confirmed_known": [], "false_positive_log_ids": set()}
@@ -221,7 +240,29 @@ def test_build_dataset_uses_default_db_limit_when_setting_missing() -> None:
 
     asyncio.run(MLModelOpsService._build_dataset(service))
 
-    assert service._raw_wazuh_logs.last_limit == 10000
+    assert service._raw_wazuh_logs.last_limit == 50000
+
+
+def test_compose_balanced_dataset_deduplicates_recent_and_historical_rows() -> None:
+    service = MLModelOpsService.__new__(MLModelOpsService)
+    service._dataset_builder = _FakeBuilder()
+
+    rows = [
+        {"ingest_key": f"hist-{idx}", "payload": {"label": "benign", "timestamp": f"2026-05-{(idx % 28) + 1:02d}T00:00:00Z"}}
+        for idx in range(55)
+    ]
+    rows.extend(
+        {"ingest_key": f"recent-{idx}", "payload": {"label": "nmap_basic_scan", "timestamp": f"2026-06-{(idx % 28) + 1:02d}T00:00:00Z"}}
+        for idx in range(10)
+    )
+    rows.append({"ingest_key": "recent-0", "payload": {"label": "nmap_basic_scan", "timestamp": "2026-06-20T00:00:00Z"}})
+
+    dataset = MLModelOpsService._compose_balanced_dataset_from_rows(service, rows, 50, 10, 25)
+
+    assert dataset["report"]["historical_base_samples"] > 0
+    assert dataset["report"]["recent_slice_samples"] == 10
+    assert dataset["report"]["final_pre_feedback_samples"] == len(dataset["features"])
+    assert len(dataset["features"]) == len(set(dataset["_training_raw_ingest_keys"]))
 
 
 def test_recover_incomplete_jobs_marks_orphans_failed() -> None:
