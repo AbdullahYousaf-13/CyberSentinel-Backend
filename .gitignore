@@ -16,6 +16,7 @@ pip-wheel-metadata/
 
 # Virtual environments
 .venv/
+.tmp-backend-testenv/
 venv/
 env/
 
