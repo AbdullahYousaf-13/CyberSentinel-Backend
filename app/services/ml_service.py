@@ -183,7 +183,7 @@ class MLService:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
-                sleep_seconds = min(5.0, max(0.5, remaining))
+                sleep_seconds = cls._readiness_retry_seconds(last_error, attempt, remaining)
                 logger.warning(
                     "Cloud model API is not ready yet at %s (attempt %s). Retrying in %.1fs. Error: %s",
                     model_api_url,
@@ -197,6 +197,14 @@ class MLService:
             "Cloud model API did not become ready within "
             f"{startup_wait}s. Base URL: {model_api_url}. Last error: {last_error}"
         )
+
+    @staticmethod
+    def _readiness_retry_seconds(last_error: str, attempt: int, remaining_seconds: float) -> float:
+        if "HTTP 429" in last_error or "Too Many Requests" in last_error:
+            retry_seconds = min(30.0, 5.0 * (2 ** min(max(attempt - 1, 0), 3)))
+        else:
+            retry_seconds = 5.0
+        return min(retry_seconds, max(0.5, remaining_seconds))
 
     @classmethod
     async def validate_cloud_model_reachable(

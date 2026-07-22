@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 import time
 from typing import Awaitable, Callable, TypeVar
@@ -5,7 +7,7 @@ from typing import Awaitable, Callable, TypeVar
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.websocket import websocket_router
 from app.db.mongo import connect_to_mongo, close_mongo_connection, ensure_indexes
@@ -37,6 +39,17 @@ async def _timed_startup_step(name: str, action: Callable[[], Awaitable[T]]) -> 
     elapsed_ms = round((time.monotonic() - started) * 1000)
     logger.info("Startup step completed after %sms: %s", elapsed_ms, name)
     return result
+
+
+async def _background_cloud_model_readiness(settings: Settings) -> None:
+    try:
+        await _timed_startup_step("cloud model readiness", lambda: MLService.initialize(settings))
+    except Exception:
+        logger.exception(
+            "Cloud model readiness check failed; continuing startup so auth, health, "
+            "logs, and alerts routes remain available. ML inference will fail until "
+            "MODEL_API_URL becomes healthy."
+        )
 
 
 def create_app() -> FastAPI:
@@ -82,7 +95,10 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup() -> None:
-        await _timed_startup_step("cloud model readiness", lambda: MLService.initialize(settings))
+        app.state.cloud_model_readiness_task = asyncio.create_task(
+            _background_cloud_model_readiness(settings),
+            name="cloud-model-readiness",
+        )
         await _timed_startup_step("mongo connection", lambda: connect_to_mongo(settings))
         await _timed_startup_step("mongo indexes", ensure_indexes)
         await _timed_startup_step(
@@ -100,6 +116,11 @@ def create_app() -> FastAPI:
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
+        task = getattr(app.state, "cloud_model_readiness_task", None)
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await stop_notification_digest_worker()
         await stop_raw_wazuh_background_worker()
         await close_mongo_connection()

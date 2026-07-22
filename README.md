@@ -64,7 +64,7 @@ The backend receives logs, stores raw and normalized security events, runs ML in
 
 ## Runtime Notes
 
-- Backend startup requires `MODEL_API_URL` and validates that the cloud-model API is reachable.
+- `MODEL_API_URL` is required for ML inference/model ops. Startup validates it in the background so auth, logs, alerts, and health routes can still come up if the cloud-model service is cold or rate-limited.
 - MongoDB is required; use `MONGO_URI` or the `MONGO_USER`/`MONGO_PASSWORD`/`MONGO_HOST` fallback.
 - `MODEL_ADMIN_TOKEN` must match in backend and cloud-model env for Model Ops.
 - `WAZUH_INGEST_KEY` must match the Wazuh forwarder env.
