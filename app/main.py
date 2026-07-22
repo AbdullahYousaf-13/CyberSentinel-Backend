@@ -25,6 +25,7 @@ from app.services.raw_wazuh_pipeline_service import (
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+RENDER_FRONTEND_ORIGIN = "https://cybersentinel-frontend.onrender.com"
 
 
 async def _timed_startup_step(name: str, action: Callable[[], Awaitable[T]]) -> T:
@@ -74,6 +75,9 @@ def create_app() -> FastAPI:
             for origin in settings.cors_allow_origins.split(",")
             if origin.strip()
         ]
+    for origin in ((settings.frontend_base_url or "").strip(), RENDER_FRONTEND_ORIGIN):
+        if origin and origin not in cors_origins:
+            cors_origins.append(origin)
     allow_credentials = True
     app.add_middleware(
         CORSMiddleware,

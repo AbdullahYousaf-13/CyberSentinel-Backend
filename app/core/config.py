@@ -46,9 +46,10 @@ class Settings(BaseSettings):
     agent_timeout_seconds: int = Field(10, env="AGENT_TIMEOUT_SECONDS")
 
     cors_allow_origins: str = Field(
-        "http://localhost:3000,http://127.0.0.1:3000", env="CORS_ALLOW_ORIGINS"
+        "https://cybersentinel-frontend.onrender.com,http://localhost:3000,http://127.0.0.1:3000",
+        env="CORS_ALLOW_ORIGINS",
     )
-    frontend_base_url: str = Field("http://localhost:3000", env="FRONTEND_BASE_URL")
+    frontend_base_url: str = Field("https://cybersentinel-frontend.onrender.com", env="FRONTEND_BASE_URL")
 
     smtp_host: Optional[str] = Field(None, env="SMTP_HOST")
     smtp_port: int = Field(587, env="SMTP_PORT")
