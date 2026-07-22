@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import json
+import time
 from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse
 
@@ -24,8 +26,10 @@ class MLService:
     @classmethod
     async def initialize(cls, settings: Settings) -> None:
         model_api_url = cls.get_required_model_api_url(settings)
-        await cls.validate_cloud_model_reachable(
-            model_api_url, settings.model_api_timeout_seconds
+        await cls.wait_for_cloud_model_ready(
+            model_api_url=model_api_url,
+            request_timeout_seconds=settings.model_api_timeout_seconds,
+            startup_wait_seconds=settings.model_startup_wait_seconds,
         )
         cls._model_version = "cloud-api"
         logger.info("Cloud model API is ready at %s", model_api_url)
@@ -156,40 +160,97 @@ class MLService:
         return model_api_url.rstrip("/")
 
     @classmethod
+    async def wait_for_cloud_model_ready(
+        cls,
+        model_api_url: str,
+        request_timeout_seconds: int,
+        startup_wait_seconds: int,
+    ) -> None:
+        startup_wait = max(1, startup_wait_seconds)
+        deadline = time.monotonic() + startup_wait
+        last_error = ""
+        attempt = 0
+
+        while True:
+            attempt += 1
+            try:
+                await cls.validate_cloud_model_reachable(model_api_url, request_timeout_seconds)
+                if attempt > 1:
+                    logger.info("Cloud model API became ready after %s startup attempts", attempt)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                sleep_seconds = min(5.0, max(0.5, remaining))
+                logger.warning(
+                    "Cloud model API is not ready yet at %s (attempt %s). Retrying in %.1fs. Error: %s",
+                    model_api_url,
+                    attempt,
+                    sleep_seconds,
+                    last_error,
+                )
+                await asyncio.sleep(sleep_seconds)
+
+        raise RuntimeError(
+            "Cloud model API did not become ready within "
+            f"{startup_wait}s. Base URL: {model_api_url}. Last error: {last_error}"
+        )
+
+    @classmethod
     async def validate_cloud_model_reachable(
         cls, model_api_url: str, timeout_seconds: int
     ) -> None:
         timeout = max(1, timeout_seconds)
-        health_candidates = [f"{model_api_url}/health", f"{model_api_url}/"]
+        health_url = f"{model_api_url}/health"
+        root_url = f"{model_api_url}/"
         errors: List[str] = []
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            for health_url in health_candidates:
-                try:
-                    response = await client.get(health_url)
-                except httpx.HTTPError as exc:
-                    errors.append(
-                        f"{health_url} -> request failed: {exc.__class__.__name__}: {exc}"
-                    )
-                    continue
-
+            try:
+                response = await client.get(health_url)
+            except httpx.HTTPError as exc:
+                errors.append(
+                    f"{health_url} -> request failed: {exc.__class__.__name__}: {exc}"
+                )
+            else:
                 if response.status_code < 400:
-                    if health_url.endswith("/health"):
-                        try:
-                            body = response.json()
-                        except ValueError:
-                            return
-                        expected = body.get("expected_feature_count")
-                        current = len(cls._feature_extractor.FEATURE_NAMES)
-                        if isinstance(expected, int) and expected != current:
-                            logger.warning(
-                                "Cloud model feature mismatch: cloud expects %s, backend produces %s. "
-                                "Retrain/activate a model compatible with wazuh_native_v1.",
-                                expected,
-                                current,
-                            )
+                    try:
+                        body = response.json()
+                    except ValueError:
+                        return
+                    expected = body.get("expected_feature_count")
+                    current = len(cls._feature_extractor.FEATURE_NAMES)
+                    if isinstance(expected, int) and expected != current:
+                        logger.warning(
+                            "Cloud model feature mismatch: cloud expects %s, backend produces %s. "
+                            "Retrain/activate a model compatible with wazuh_native_v1.",
+                            expected,
+                            current,
+                        )
                     return
                 errors.append(f"{health_url} -> HTTP {response.status_code}")
+
+                if response.status_code not in {
+                    status.HTTP_404_NOT_FOUND,
+                    status.HTTP_405_METHOD_NOT_ALLOWED,
+                }:
+                    raise RuntimeError(
+                        "Cloud model API is not reachable or not healthy. "
+                        f"Base URL: {model_api_url}. Checks: {'; '.join(errors)}"
+                    )
+
+            try:
+                response = await client.get(root_url)
+            except httpx.HTTPError as exc:
+                errors.append(
+                    f"{root_url} -> request failed: {exc.__class__.__name__}: {exc}"
+                )
+            else:
+                if response.status_code < 400:
+                    return
+                errors.append(f"{root_url} -> HTTP {response.status_code}")
 
         raise RuntimeError(
             "Cloud model API is not reachable or not healthy. "

@@ -1,3 +1,7 @@
+import logging
+import time
+from typing import Awaitable, Callable, TypeVar
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -16,6 +20,23 @@ from app.services.raw_wazuh_pipeline_service import (
     start_raw_wazuh_background_worker,
     stop_raw_wazuh_background_worker,
 )
+
+logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+async def _timed_startup_step(name: str, action: Callable[[], Awaitable[T]]) -> T:
+    started = time.monotonic()
+    logger.info("Startup step started: %s", name)
+    try:
+        result = await action()
+    except Exception:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        logger.exception("Startup step failed after %sms: %s", elapsed_ms, name)
+        raise
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    logger.info("Startup step completed after %sms: %s", elapsed_ms, name)
+    return result
 
 
 def create_app() -> FastAPI:
@@ -61,12 +82,21 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup() -> None:
-        await MLService.initialize(settings)
-        await connect_to_mongo(settings)
-        await ensure_indexes()
-        await MLModelOpsService(settings).recover_incomplete_jobs()
-        await start_raw_wazuh_background_worker(settings)
-        await start_notification_digest_worker(settings)
+        await _timed_startup_step("cloud model readiness", lambda: MLService.initialize(settings))
+        await _timed_startup_step("mongo connection", lambda: connect_to_mongo(settings))
+        await _timed_startup_step("mongo indexes", ensure_indexes)
+        await _timed_startup_step(
+            "model job recovery",
+            lambda: MLModelOpsService(settings).recover_incomplete_jobs(),
+        )
+        await _timed_startup_step(
+            "raw wazuh workers",
+            lambda: start_raw_wazuh_background_worker(settings),
+        )
+        await _timed_startup_step(
+            "notification digest worker",
+            lambda: start_notification_digest_worker(settings),
+        )
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:

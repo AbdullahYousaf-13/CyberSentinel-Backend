@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 VALID_SEVERITIES = ("high", "medium", "low")
 VALID_FREQUENCIES = ("immediate", "daily")
 DEFAULT_TIMEZONE = "Asia/Karachi"
+DEFAULT_TIMEZONE_OFFSET = timezone(timedelta(hours=5), DEFAULT_TIMEZONE)
 DAILY_DIGEST_HOUR = 9
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,10 @@ def compute_next_digest_at(now_utc: datetime, timezone_name: str) -> datetime:
         local_tz = ZoneInfo(DEFAULT_TIMEZONE)
     except ZoneInfoNotFoundError:
         logger.warning(
-            "Could not resolve '%s'; using UTC for digest scheduling",
+            "Could not resolve '%s'; using fixed UTC+05:00 for digest scheduling",
             DEFAULT_TIMEZONE,
         )
-        local_tz = timezone.utc
+        local_tz = DEFAULT_TIMEZONE_OFFSET
     local_now = aware_now.astimezone(local_tz)
     local_target = local_now.replace(hour=DAILY_DIGEST_HOUR, minute=0, second=0, microsecond=0)
     if local_now >= local_target:

@@ -42,7 +42,12 @@ def resolve_mongo_uri(settings: Settings) -> str:
 async def connect_to_mongo(settings: Settings) -> None:
     global _client, _db
     uri = resolve_mongo_uri(settings)
-    _client = AsyncIOMotorClient(uri, tlsCAFile=certifi.where())
+    timeout_ms = max(1000, int(settings.mongo_server_selection_timeout_ms))
+    _client = AsyncIOMotorClient(
+        uri,
+        tlsCAFile=certifi.where(),
+        serverSelectionTimeoutMS=timeout_ms,
+    )
     _db = _client[settings.mongo_db]
     try:
         await _client.admin.command("ping")

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     anomaly_score_threshold: float = Field(0.65, env="ANOMALY_SCORE_THRESHOLD")
     model_api_url: Optional[str] = Field(None, env="MODEL_API_URL")
     model_api_timeout_seconds: int = Field(10, env="MODEL_API_TIMEOUT_SECONDS")
+    model_startup_wait_seconds: int = Field(90, env="MODEL_STARTUP_WAIT_SECONDS")
     model_admin_token: Optional[str] = Field(None, env="MODEL_ADMIN_TOKEN")
     raw_wazuh_training_path: str = Field(
         "C:/Users/anumy/Downloads/cybersentinel_raw_wazuh_logs.json",
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     retrain_historical_base_target: int = Field(25000, env="RETRAIN_HISTORICAL_BASE_TARGET")
     min_samples_per_attack_class: int = Field(50, env="MIN_SAMPLES_PER_ATTACK_CLASS")
     raw_wazuh_worker_concurrency: int = Field(4, env="RAW_WAZUH_WORKER_CONCURRENCY")
+    mongo_server_selection_timeout_ms: int = Field(5000, env="MONGO_SERVER_SELECTION_TIMEOUT_MS")
 
     agent_service_url: Optional[str] = Field(None, env="AGENT_SERVICE_URL")
     agent_timeout_seconds: int = Field(10, env="AGENT_TIMEOUT_SECONDS")

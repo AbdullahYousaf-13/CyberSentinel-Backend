@@ -89,25 +89,48 @@ def extract_network_context(payload: Dict[str, Any]) -> Optional[Dict[str, Optio
     }
 
 
+def _top_level_network_context(log_doc: Dict[str, Any]) -> Optional[Dict[str, Optional[str]]]:
+    network = _as_dict(log_doc.get("network"))
+    srcip = _first_non_empty(network.get("srcip"), log_doc.get("source_ip"))
+    dstip = _first_non_empty(network.get("dstip"), log_doc.get("destination_ip"))
+    srcport = _first_non_empty(network.get("srcport"))
+    dstport = _first_non_empty(network.get("dstport"))
+    protocol = _first_non_empty(network.get("protocol"))
+    action = _first_non_empty(network.get("action"))
+
+    if not any([srcip, dstip, srcport, dstport, protocol, action]):
+        return None
+
+    return {
+        "srcip": srcip,
+        "dstip": dstip,
+        "srcport": srcport,
+        "dstport": dstport,
+        "protocol": protocol,
+        "action": action,
+    }
+
+
 def _derive_source_value(payload: Dict[str, Any], log_doc: Dict[str, Any]) -> Optional[str]:
     data = _as_dict(payload.get("data"))
-    agent = _as_dict(payload.get("agent"))
+    network = _as_dict(log_doc.get("network"))
     return _first_non_empty(
         data.get("srcip"),
         payload.get("srcip"),
-        agent.get("name"),
         data.get("srcuser"),
-        payload.get("location"),
-        log_doc.get("source"),
+        network.get("srcip"),
+        log_doc.get("source_ip"),
     )
 
 
 def _derive_destination_value(payload: Dict[str, Any], log_doc: Dict[str, Any]) -> Optional[str]:
     data = _as_dict(payload.get("data"))
-    agent = _as_dict(payload.get("agent"))
+    network_doc = _as_dict(log_doc.get("network"))
     dst = _first_non_empty(
         data.get("dstip"),
         payload.get("dstip"),
+        network_doc.get("dstip"),
+        log_doc.get("destination_ip"),
         data.get("dstuser"),
         data.get("hostname"),
     )
@@ -115,8 +138,8 @@ def _derive_destination_value(payload: Dict[str, Any], log_doc: Dict[str, Any]) 
         return dst
 
     network = extract_network_context(payload)
-    if not network:
-        return _as_str(agent.get("name"))
+    if network:
+        return _first_non_empty(network.get("dstip"), network.get("dstuser"))
     return None
 
 
@@ -135,14 +158,14 @@ def build_normalized_log_context(log_doc: Dict[str, Any]) -> Dict[str, Any]:
     event_time = _parse_event_time(payload.get("timestamp")) or _parse_event_time(log_doc.get("timestamp"))
     decoder_name = _as_str(decoder.get("name"))
     event_origin = _first_non_empty(payload.get("location"), decoder_name, log_doc.get("source"))
-    network = extract_network_context(payload)
+    network = extract_network_context(payload) or _top_level_network_context(log_doc)
     source_app = classify_source_app(payload, log_doc)
     source_ip = _derive_source_value(payload, log_doc)
     destination_ip = _derive_destination_value(payload, log_doc)
     channel = classify_channel(network, decoder_name)
 
     return {
-        "event_id": _as_str(payload.get("id")),
+        "event_id": _first_non_empty(payload.get("id"), log_doc.get("event_id")),
         "event_time": event_time,
         "agent_name": _as_str(agent.get("name")),
         "event_origin": event_origin,
