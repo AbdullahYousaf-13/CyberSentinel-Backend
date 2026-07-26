@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -78,6 +79,37 @@ def _map_alert_response(alert: dict) -> AlertResponse:
     )
 
 
+def _build_alert_search_filter(query: str) -> dict[str, Any]:
+    escaped_query = re.escape(query.strip())
+    regex = {"$regex": escaped_query, "$options": "i"}
+    return {
+        "$or": [
+            {"incident_id": regex},
+            {"alert_type": regex},
+            {"severity": regex},
+            {"status": regex},
+            {"classification": regex},
+            {"source_ip": regex},
+            {"destination_ip": regex},
+            {"log_ids": regex},
+            {"model_versions_seen": regex},
+            {"metadata.log_summary.event_id": regex},
+            {"metadata.log_summary.agent_name": regex},
+            {"metadata.log_summary.decoder_name": regex},
+            {"metadata.log_summary.event_origin": regex},
+            {"metadata.log_summary.message": regex},
+            {"children.log_id": regex},
+            {"children.severity": regex},
+            {"children.model_version": regex},
+            {"children.metadata.log_summary.event_id": regex},
+            {"children.metadata.log_summary.agent_name": regex},
+            {"children.metadata.log_summary.decoder_name": regex},
+            {"children.metadata.log_summary.event_origin": regex},
+            {"children.metadata.log_summary.message": regex},
+        ]
+    }
+
+
 @router.get("/")
 async def list_alerts(
     current_user: dict = Depends(get_current_user),
@@ -87,6 +119,7 @@ async def list_alerts(
     alert_type: Optional[str] = None,
     start_ts: Optional[datetime] = None,
     end_ts: Optional[datetime] = None,
+    q: Optional[str] = None,
 ) -> list[dict]:
     service = AlertService()
     filters = {}
@@ -103,6 +136,8 @@ async def list_alerts(
             filters["created_at"]["$gte"] = start_ts
         if end_ts:
             filters["created_at"]["$lte"] = end_ts
+    if q and q.strip():
+        filters["$and"] = [_build_alert_search_filter(q)]
     try:
         alerts = await service.list_alerts(limit=limit, offset=offset, filters=filters)
     except Exception:  # noqa: BLE001
