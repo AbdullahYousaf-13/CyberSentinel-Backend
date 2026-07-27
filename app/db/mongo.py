@@ -90,6 +90,7 @@ async def ensure_indexes() -> None:
     )
     await db.get_collection("logs").create_index([("ml_status", ASCENDING), ("timestamp", DESCENDING)])
     await db.get_collection("alerts").create_index([("created_at", DESCENDING)])
+    await db.get_collection("alerts").create_index([("opened_at", DESCENDING)])
     await db.get_collection("alerts").create_index("severity")
     await db.get_collection("alerts").create_index("alert_type")
     await db.get_collection("alerts").create_index([("correlation_key", ASCENDING), ("status", ASCENDING), ("last_seen_at", DESCENDING)])

@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
+import re
 from typing import Any, Optional
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 
@@ -23,6 +25,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 LIST_CHILDREN_PREVIEW_LIMIT = 10
 LIST_LOG_IDS_PREVIEW_LIMIT = 25
+ALERT_SEARCH_QUERY_MAX_LENGTH = 120
 
 
 def _response_classification(alert: dict) -> Optional[str]:
@@ -78,6 +81,69 @@ def _map_alert_response(alert: dict) -> AlertResponse:
     )
 
 
+def _normalize_filter_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _build_alert_search_filter(query: str) -> dict[str, Any]:
+    normalized = query.strip()
+    escaped_query = re.escape(normalized)
+    regex = {"$regex": escaped_query, "$options": "i"}
+    branches: list[dict[str, Any]] = [
+        {"incident_id": regex},
+        {"source_ip": regex},
+        {"metadata.log_summary.source_ip": regex},
+        {"metadata.log_summary.network.srcip": regex},
+        {"children.metadata.log_summary.source_ip": regex},
+        {"children.metadata.log_summary.network.srcip": regex},
+        {"model_versions_seen": regex},
+        {"children.model_version": regex},
+    ]
+    if ObjectId.is_valid(normalized):
+        branches.append({"_id": ObjectId(normalized)})
+    return {"$or": branches}
+
+
+def _build_alert_filters(
+    severity: Optional[str],
+    alert_type: Optional[str],
+    start_ts: Optional[datetime],
+    end_ts: Optional[datetime],
+    q: Optional[str],
+) -> dict[str, Any]:
+    conditions: list[dict[str, Any]] = []
+    normalized_severity = severity.strip().lower() if severity else ""
+    if normalized_severity:
+        if normalized_severity == "high":
+            conditions.append({"severity": {"$in": ["high", "critical"]}})
+        else:
+            conditions.append({"severity": normalized_severity})
+
+    normalized_alert_type = alert_type.strip() if alert_type else ""
+    if normalized_alert_type:
+        conditions.append({"alert_type": normalized_alert_type})
+
+    if start_ts or end_ts:
+        timestamp_filter: dict[str, datetime] = {}
+        if start_ts:
+            timestamp_filter["$gte"] = _normalize_filter_datetime(start_ts)
+        if end_ts:
+            timestamp_filter["$lte"] = _normalize_filter_datetime(end_ts)
+        conditions.append({"opened_at": timestamp_filter})
+
+    normalized_query = q.strip() if q else ""
+    if normalized_query:
+        conditions.append(_build_alert_search_filter(normalized_query))
+
+    if not conditions:
+        return {}
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"$and": conditions}
+
+
 @router.get("/")
 async def list_alerts(
     current_user: dict = Depends(get_current_user),
@@ -87,22 +153,16 @@ async def list_alerts(
     alert_type: Optional[str] = None,
     start_ts: Optional[datetime] = None,
     end_ts: Optional[datetime] = None,
+    q: Optional[str] = Query(None, max_length=ALERT_SEARCH_QUERY_MAX_LENGTH),
 ) -> list[dict]:
     service = AlertService()
-    filters = {}
-    if severity:
-        if severity.lower() == "high":
-            filters["severity"] = {"$in": ["high", "critical"]}
-        else:
-            filters["severity"] = severity
-    if alert_type:
-        filters["alert_type"] = alert_type
-    if start_ts or end_ts:
-        filters["created_at"] = {}
-        if start_ts:
-            filters["created_at"]["$gte"] = start_ts
-        if end_ts:
-            filters["created_at"]["$lte"] = end_ts
+    filters = _build_alert_filters(
+        severity=severity,
+        alert_type=alert_type,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        q=q,
+    )
     try:
         alerts = await service.list_alerts(limit=limit, offset=offset, filters=filters)
     except Exception:  # noqa: BLE001
@@ -139,6 +199,31 @@ async def list_alerts(
             logger.exception("Skipping malformed alert document: %s", alert_id)
             continue
     return response
+
+
+@router.get("/count")
+async def count_alerts(
+    current_user: dict = Depends(get_current_user),
+    severity: Optional[str] = None,
+    alert_type: Optional[str] = None,
+    start_ts: Optional[datetime] = None,
+    end_ts: Optional[datetime] = None,
+    q: Optional[str] = Query(None, max_length=ALERT_SEARCH_QUERY_MAX_LENGTH),
+) -> dict[str, int]:
+    service = AlertService()
+    filters = _build_alert_filters(
+        severity=severity,
+        alert_type=alert_type,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        q=q,
+    )
+    try:
+        count = await service.count_alerts(filters=filters)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to count alerts from repository")
+        return {"count": 0}
+    return {"count": count}
 
 
 @router.get("/analytics", response_model=AlertAnalyticsResponse)

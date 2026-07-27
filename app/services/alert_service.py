@@ -229,6 +229,9 @@ class AlertService:
     ) -> list:
         return await self._alerts.list_alerts(limit=limit, offset=offset, filters=filters)
 
+    async def count_alerts(self, filters: Optional[Dict[str, Any]] = None) -> int:
+        return await self._alerts.count_alerts(filters=filters)
+
     async def get_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
         return await self._alerts.get_alert(alert_id)
 
