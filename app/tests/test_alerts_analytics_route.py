@@ -12,6 +12,26 @@ def test_response_classification_returns_model_value_or_none() -> None:
     assert alerts_route._response_classification({"alert_type": "anomaly"}) is None
 
 
+def test_map_alert_response_uses_legacy_log_summary_time_when_opened_at_missing() -> None:
+    response = alerts_route._map_alert_response(
+        {
+            "_id": "64b64c9277f33a3f8c7d0e4a",
+            "created_at": datetime(2026, 5, 12, 8, 51, 39),
+            "log_id": "64b64c9277f33a3f8c7d0e4b",
+            "alert_type": "anomaly",
+            "severity": "medium",
+            "metadata": {
+                "log_summary": {
+                    "event_time": "2026-05-11T16:00:11Z",
+                }
+            },
+        }
+    )
+
+    assert response.opened_at.isoformat() == "2026-05-11T16:00:11+00:00"
+    assert response.last_seen_at == response.opened_at
+
+
 def test_get_alert_analytics_route_returns_empty_shape(monkeypatch) -> None:
     class _FakeAlertService:
         async def get_alert_analytics(self):

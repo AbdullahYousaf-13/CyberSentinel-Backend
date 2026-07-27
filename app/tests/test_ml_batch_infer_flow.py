@@ -114,6 +114,26 @@ def test_ingest_log_sets_pending_ml_status() -> None:
     assert fake_logs.created_payload["ml_status"] == "pending"
 
 
+def test_ingest_log_normalizes_string_timestamp_to_utc() -> None:
+    fake_logs = _FakeLogRepository([])
+    service = IngestionService.__new__(IngestionService)
+    service._logs = fake_logs
+
+    asyncio.run(
+        service.ingest_log(
+            {
+                "timestamp": "2026-07-27T17:30:00+05:00",
+                "message": "hello",
+                "metadata": {},
+            },
+            source="api",
+        )
+    )
+
+    assert fake_logs.created_payload is not None
+    assert fake_logs.created_payload["timestamp"] == datetime(2026, 7, 27, 12, 30, 0)
+
+
 def test_run_batch_inference_marks_done_and_error_and_continues() -> None:
     logs = [
         {"_id": "log-1", "source": "api", "message": "benign case"},

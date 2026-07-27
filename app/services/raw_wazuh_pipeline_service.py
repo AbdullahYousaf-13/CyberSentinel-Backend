@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import Settings
@@ -12,6 +12,7 @@ from app.db.repositories.raw_wazuh_log_repository import RawWazuhLogRepository
 from app.ml.features.wazuh_feature_extractor import WazuhFeatureExtractor
 from app.services.alert_service import AlertService
 from app.services.ml_service import MLService
+from app.utils.time import coerce_datetime_utc, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class RawWazuhPipelineService:
         except Exception as exc:  # noqa: BLE001
             attempts = int(((claimed.get("processing") or {}).get("attempts") or 1))
             retry_delay = min(_RETRY_BASE_SEC * (2 ** max(attempts - 1, 0)), _RETRY_CAP_SEC)
-            next_retry_at = datetime.utcnow() + timedelta(seconds=retry_delay)
+            next_retry_at = utc_now_naive() + timedelta(seconds=retry_delay)
             await self._raw_repo.mark_error(ingest_key, next_retry_at, str(exc))
             logger.exception("Failed processing raw Wazuh log %s", ingest_key)
             return True
@@ -195,7 +196,7 @@ class RawWazuhPipelineService:
             "message": message,
             "severity": severity,
             "metadata": metadata,
-            "ingested_at": datetime.utcnow(),
+            "ingested_at": utc_now_naive(),
             "ml_status": "pending",
         }
 
@@ -222,31 +223,7 @@ class RawWazuhPipelineService:
 
     @staticmethod
     def _parse_timestamp(value: Any) -> datetime:
-        if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value
-            return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-        if isinstance(value, (int, float)):
-            ts = float(value)
-            if ts > 10_000_000_000:
-                ts = ts / 1000.0
-            return datetime.utcfromtimestamp(ts)
-
-        if isinstance(value, str):
-            raw = value.strip()
-            if raw:
-                iso = raw.replace("Z", "+00:00")
-                if re.search(r"[+-]\d{4}$", iso):
-                    iso = f"{iso[:-5]}{iso[-5:-2]}:{iso[-2:]}"
-                try:
-                    parsed = datetime.fromisoformat(iso)
-                    if parsed.tzinfo is None:
-                        return parsed
-                    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
-                except ValueError:
-                    pass
-        return datetime.utcnow()
+        return coerce_datetime_utc(value)
 
 
 async def start_raw_wazuh_background_worker(settings: Settings) -> None:

@@ -11,6 +11,7 @@ from app.services.auth_service import get_current_user
 from app.services.ingestion_service import IngestionService
 from app.services.log_context_service import build_normalized_log_context
 from app.db.repositories.log_repository import LogRepository
+from app.utils.time import as_utc_aware, coerce_datetime_utc
 
 router = APIRouter()
 
@@ -180,9 +181,9 @@ def _build_log_filters(
     if start_ts or end_ts:
         timestamp_filter: Dict[str, datetime] = {}
         if start_ts:
-            timestamp_filter["$gte"] = start_ts
+            timestamp_filter["$gte"] = coerce_datetime_utc(start_ts)
         if end_ts:
-            timestamp_filter["$lte"] = end_ts
+            timestamp_filter["$lte"] = coerce_datetime_utc(end_ts)
         conditions.append({"timestamp": timestamp_filter})
 
     if not conditions:
@@ -196,13 +197,13 @@ def _to_log_response(log: Dict[str, Any]) -> LogResponse:
     context = build_normalized_log_context(log)
     return LogResponse(
         id=str(log["_id"]),
-        timestamp=log["timestamp"],
+        timestamp=as_utc_aware(log["timestamp"]) or log["timestamp"],
         source=log["source"],
         message=log["message"],
         metadata=log.get("metadata", {}),
         severity=log.get("severity"),
         event_id=context["event_id"],
-        event_time=context["event_time"],
+        event_time=as_utc_aware(context["event_time"]) if context["event_time"] else None,
         agent_name=context["agent_name"],
         event_origin=context["event_origin"],
         decoder_name=context["decoder_name"],

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
 import re
 from typing import Any, Optional
@@ -20,6 +20,7 @@ from app.services.alert_service import AlertService
 from app.services.auth_service import get_current_admin_user, get_current_user
 from app.services.investigation_agent_service import InvestigationAgentService
 from app.core.config import get_settings
+from app.utils.time import as_utc_aware, coerce_datetime_utc, parse_datetime_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -39,9 +40,6 @@ def _response_classification(alert: dict) -> Optional[str]:
 
 
 def _map_alert_response(alert: dict) -> AlertResponse:
-    created_at = alert.get("created_at")
-    if not isinstance(created_at, datetime):
-        created_at = datetime.utcnow()
     children_raw = alert.get("children")
     children: list[dict[str, Any]] = []
     if isinstance(children_raw, list):
@@ -52,21 +50,30 @@ def _map_alert_response(alert: dict) -> AlertResponse:
             if "log_id" in normalized_child:
                 normalized_child["log_id"] = str(normalized_child.get("log_id") or "")
             children.append(normalized_child)
-    log_ids_raw = alert.get("log_ids")
-    log_ids = [str(item) for item in log_ids_raw] if isinstance(log_ids_raw, list) else []
-    if not log_ids and alert.get("log_id"):
-        log_ids = [str(alert.get("log_id"))]
     metadata_raw = alert.get("metadata", {})
     if not isinstance(metadata_raw, dict):
         metadata_raw = {}
     metadata = jsonable_encoder(metadata_raw)
+
+    created_at = parse_datetime_utc(alert.get("created_at")) or datetime.utcnow()
+    first_child_time = parse_datetime_utc(children[0].get("event_time")) if children else None
+    latest_child_time = parse_datetime_utc(children[-1].get("event_time")) if children else None
+    summary = metadata_raw.get("log_summary") if isinstance(metadata_raw.get("log_summary"), dict) else {}
+    summary_event_time = parse_datetime_utc(summary.get("event_time"))
+    opened_at = parse_datetime_utc(alert.get("opened_at")) or first_child_time or summary_event_time or created_at
+    last_seen_at = parse_datetime_utc(alert.get("last_seen_at")) or latest_child_time or opened_at
+
+    log_ids_raw = alert.get("log_ids")
+    log_ids = [str(item) for item in log_ids_raw] if isinstance(log_ids_raw, list) else []
+    if not log_ids and alert.get("log_id"):
+        log_ids = [str(alert.get("log_id"))]
     return AlertResponse(
         id=str(alert["_id"]),
         incident_id=str(alert.get("incident_id") or alert["_id"]),
-        created_at=created_at,
-        opened_at=alert.get("opened_at") or created_at,
-        last_seen_at=alert.get("last_seen_at") or created_at,
-        closed_at=alert.get("closed_at"),
+        created_at=as_utc_aware(created_at) or created_at,
+        opened_at=as_utc_aware(opened_at) or opened_at,
+        last_seen_at=as_utc_aware(last_seen_at) or last_seen_at,
+        closed_at=as_utc_aware(alert.get("closed_at")),
         status=str(alert.get("status") or "open"),
         event_count=int(alert.get("event_count") or len(log_ids) or len(children) or 0),
         log_ids=log_ids,
@@ -82,9 +89,7 @@ def _map_alert_response(alert: dict) -> AlertResponse:
 
 
 def _normalize_filter_datetime(value: datetime) -> datetime:
-    if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
+    return coerce_datetime_utc(value)
 
 
 def _build_alert_search_filter(query: str) -> dict[str, Any]:
@@ -131,7 +136,17 @@ def _build_alert_filters(
             timestamp_filter["$gte"] = _normalize_filter_datetime(start_ts)
         if end_ts:
             timestamp_filter["$lte"] = _normalize_filter_datetime(end_ts)
-        conditions.append({"opened_at": timestamp_filter})
+        conditions.append(
+            {
+                "$or": [
+                    {"opened_at": timestamp_filter},
+                    {
+                        "opened_at": {"$exists": False},
+                        "metadata.log_summary.event_time": timestamp_filter,
+                    },
+                ]
+            }
+        )
 
     normalized_query = q.strip() if q else ""
     if normalized_query:

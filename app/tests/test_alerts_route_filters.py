@@ -52,13 +52,18 @@ def test_build_alert_filters_combines_existing_controls_with_opened_at_and_searc
     clauses = filters["$and"]
     assert {"severity": {"$in": ["high", "critical"]}} in clauses
     assert {"alert_type": "known_attack"} in clauses
+    time_clause = next(clause for clause in clauses if "$or" in clause and any("opened_at" in branch for branch in clause["$or"]))
     assert any(
-        clause.get("opened_at", {}).get("$gte") == datetime(2026, 7, 24, 13, 7)
-        for clause in clauses
+        branch.get("opened_at", {}).get("$gte") == datetime(2026, 7, 24, 13, 7)
+        for branch in time_clause["$or"]
     )
     assert any(
-        clause.get("opened_at", {}).get("$lte") == datetime(2026, 7, 25, 9, 30)
-        for clause in clauses
+        branch.get("opened_at", {}).get("$lte") == datetime(2026, 7, 25, 9, 30)
+        for branch in time_clause["$or"]
+    )
+    assert any(
+        branch.get("metadata.log_summary.event_time", {}).get("$gte") == datetime(2026, 7, 24, 13, 7)
+        for branch in time_clause["$or"]
     )
     assert any("model_versions_seen" in branch for clause in clauses for branch in clause.get("$or", []))
 

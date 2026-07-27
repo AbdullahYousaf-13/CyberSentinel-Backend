@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
-from pymongo import ASCENDING
+from pymongo import ASCENDING, DESCENDING
 
 from app.db.mongo import get_db
 
@@ -108,7 +108,7 @@ class AlertRepository:
         query = filters or {}
         cursor = (
             self._collection.find(query)
-            .sort("created_at", -1)
+            .sort([("last_seen_at", DESCENDING), ("created_at", DESCENDING)])
             .skip(offset)
             .limit(limit)
         )

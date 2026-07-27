@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from app.core.config import get_settings
@@ -10,6 +10,7 @@ from app.services.log_context_service import build_normalized_log_context
 from app.services.ml_promotion_service import MLPromotionService
 from app.services.ml_suppression_service import MLSuppressionService
 from app.services.notification_service import NotificationService
+from app.utils.time import coerce_datetime_utc, parse_datetime_utc, utc_now_naive
 
 ANALYTICS_TARGET_BUCKETS = 12
 _PLACEHOLDER_LABELS = {"n/a", "na", "none", "null", "undefined", "unknown_attack"}
@@ -83,9 +84,7 @@ def _derive_log_summary(log_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _ensure_utc_naive(value: datetime) -> datetime:
-    if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
+    return coerce_datetime_utc(value)
 
 
 def _select_trend_unit(span: timedelta) -> str:
@@ -195,11 +194,10 @@ class AlertService:
             destination_ip=dst_ip,
             signal_key=signal_key,
         )
-        event_time = datetime.utcnow()
+        event_time = utc_now_naive()
         if linked_log:
             raw_time = linked_log.get("event_time") or linked_log.get("timestamp")
-            if isinstance(raw_time, datetime):
-                event_time = raw_time
+            event_time = parse_datetime_utc(raw_time) or event_time
         alert_id, created = await self._alerts.create_or_update_incident(
             correlation_key=correlation_key,
             alert_type=alert_type,

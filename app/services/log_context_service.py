@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
+
+from app.utils.time import parse_datetime_utc
 
 AUTH_SOURCE_PATTERN = re.compile(r"(auth|sshd|login|secure)", re.IGNORECASE)
 SYSTEM_SOURCE_PATTERN = re.compile(r"(kern|kernel|syslog|system)", re.IGNORECASE)
@@ -31,32 +33,7 @@ def _first_non_empty(*values: Any) -> Optional[str]:
 
 
 def _parse_event_time(value: Any) -> Optional[datetime]:
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-    if isinstance(value, (int, float)):
-        ts = float(value)
-        if ts > 10_000_000_000:
-            ts = ts / 1000.0
-        return datetime.utcfromtimestamp(ts)
-
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return None
-        iso = raw.replace("Z", "+00:00")
-        if re.search(r"[+-]\d{4}$", iso):
-            iso = f"{iso[:-5]}{iso[-5:-2]}:{iso[-2:]}"
-        try:
-            parsed = datetime.fromisoformat(iso)
-            if parsed.tzinfo is None:
-                return parsed
-            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        except ValueError:
-            return None
-    return None
+    return parse_datetime_utc(value)
 
 
 def get_raw_wazuh_payload(log_doc: Dict[str, Any]) -> Dict[str, Any]:

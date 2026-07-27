@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.routes.logs import _build_log_filters
 
@@ -41,6 +41,21 @@ def test_build_log_filters_preserves_existing_time_and_source_filters() -> None:
     assert any("source" in clause for clause in clauses)
     assert any(clause.get("timestamp", {}).get("$gte") == start_ts for clause in clauses if "timestamp" in clause)
     assert any(clause.get("timestamp", {}).get("$lte") == end_ts for clause in clauses if "timestamp" in clause)
+
+
+def test_build_log_filters_normalizes_aware_times_to_utc() -> None:
+    filters = _build_log_filters(
+        source=None,
+        severity=None,
+        agent=None,
+        origin=None,
+        source_app=None,
+        channel=None,
+        start_ts=datetime(2026, 7, 27, 17, 30, tzinfo=timezone(timedelta(hours=5))),
+        end_ts=None,
+    )
+
+    assert filters["timestamp"]["$gte"] == datetime(2026, 7, 27, 12, 30)
 
 
 def test_build_log_filters_supports_source_app_and_channel() -> None:
